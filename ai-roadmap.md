@@ -37,26 +37,23 @@ Voorwaarde voor alle volgende AI-werk: ergens een functie kunnen draaien voor AP
 
 ## Fase 3 — Wanbetaler-voorspelling (afhankelijk van pad-keuze)
 
-Kies één pad. Allemaal vereisen ze serverless (Fase 2).
+Kies één pad. Beide vereisen serverless (Fase 2). De LLM-proxy-variant (Claude als soft-prediction) is bewust uitgesloten — geen echte ML, niet gekalibreerd op Covebo.
 
-- [ ] **Pad A: LLM-proxy** (snelste, ~4 uur)
-  - `/api/wanbetaler` stuurt features naar Claude met prompt "schat dagen vertraging + confidence".
-  - Niet écht ML, maar levert direct waarde. Goed als baseline.
-- [ ] **Pad B: TabPFN-v2** via HF Inference Endpoint (~half dag)
+- [ ] **Pad A: TabPFN-v2** via HF Inference Endpoint (~half dag)
   - In-context learning op Covebo's historie als training-set.
   - Geen eigen training-pipeline nodig.
   - Limiet ~10k rows / beperkt aantal features.
-- [ ] **Pad C: XGBoost** lokaal getraind, gebundled in serverless (~1 dag, productieklaar)
+- [ ] **Pad B: XGBoost** lokaal getraind, gebundled in serverless (~1 dag, productieklaar)
   - Train op Covebo-historie, exporteer als `model.json`.
   - Standaard credit-scoring stack.
-  - **Caveat:** 1 jaar historie + 1.000 actieve debiteuren is mager voor productie-grade training. Pad A is dan eerlijker totdat er meer data is.
+  - **Caveat:** 1 jaar historie + 1.000 actieve debiteuren is mager voor productie-grade training. Pad A is dan een zinvolle tussenstap totdat er meer data is.
 
-Output velden (alle paden gelijk):
+Output velden (beide paden gelijk):
 - `wanbetaler_score` (0–5)
 - `predicted_days_late` (geschatte vertraging)
 - `wanbetaler_type` (categorisch label)
 - `confidence` (`hoog` / `middel` / `geen`)
-- `explanation` (template of LLM-gegenereerd)
+- `explanation` (template-gegenereerd; LLM-uitleg via /api/explain in Fase 2)
 
 ---
 
