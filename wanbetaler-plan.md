@@ -4,14 +4,15 @@ Concreet stappenplan om wanbetaler-voorspelling toe te voegen aan Mila, met expl
 
 ---
 
-## Variant-keuze
+## Beslissingen
 
-Twee opties stonden open (Pad A = TabPFN, Pad B = eigen XGBoost). **Aanraden: beginnen met Pad A.**
+- **Variant: Pad A (TabPFN).** Levert in een dag een werkende eerste versie zonder dat we een training-pipeline hoeven op te zetten. Later naadloos te upgraden naar Pad B (eigen XGBoost): de architectuur — Edge Function als inference-endpoint — blijft gelijk, alleen de interne implementatie verandert.
 
-Reden: TabPFN levert in een dag een werkende eerste versie zonder dat we een training-pipeline hoeven op te zetten. Pad B is grondiger maar:
-- Vereist 2–3× zoveel werk
-- 1 jaar historie van Covebo is mager voor robuuste training (eerder besproken)
-- We kunnen later naadloos overstappen: de architectuur (Edge Function als inference-endpoint) blijft hetzelfde, alleen de interne implementatie verandert
+- **Definitie wanbetaler:** een debiteur is een wanbetaler op het moment dat hij te laat is met betalen. Operationeel betekent dit: een debiteur krijgt label `is_wanbetaler = true` als hij op de snapshot-datum **minstens één openstaande factuur heeft waarvan de vervaldatum gepasseerd is**.
+
+  *Implicatie:* met de huidige Covebo-snapshot zou dit ongeveer 60% van de actieve debiteuren als wanbetaler labelen. Dat is een werkbare verdeling voor TabPFN, maar de voorspelling gaat dan vooral over "lijkt deze klant op de groep die meestal vervallen posten heeft?" — niet over "gaat hij failliet". Eerlijk communiceren via de uitleg-tekst.
+
+  *Caveat in feature-keuze:* sommige features die we al hebben (zoals `pctOverdue` of `oldestDays`) zijn direct afgeleid van het label — die mogen niet als input meegegeven worden, anders voorspelt het model zichzelf. Veilige features: historisch gemiddelde DSO, trend, volatiliteit, patroon, omzetaandeel, factuur-tellingen.
 
 ---
 
@@ -46,35 +47,34 @@ Browser updatet detailpaneel
 
 ---
 
-## Wat jij doet (~30 minuten setup + één beslissing)
+## Wat jij doet (~30 minuten setup)
 
 1. **Supabase project aanmaken** (nieuw of bestaand). Free tier volstaat.
 2. **HuggingFace account + read-token genereren** (gratis). Token nodig om TabPFN-endpoint aan te roepen.
-3. **Beslissing: wat noemen we een "wanbetaler" voor Covebo?** Dit bepaalt de trainingslabels. Twee voorstellen — kies één of geef een eigen definitie:
-    - *Definitie A (mild):* een debiteur is wanbetaler als zijn gemiddelde DSO in het afgelopen jaar > 30 dagen was.
-    - *Definitie B (strikt):* een debiteur is wanbetaler als hij momenteel ≥1 factuur heeft die >60 dagen vervallen is, of in het afgelopen jaar een afschrijving had.
-    - Definitie A geeft meer voorbeelden (waarschijnlijk 15–25% van debiteuren), Definitie B is selectiever (waarschijnlijk 5–10%) maar voelt productmatig zuiverder.
-4. **Supabase CLI installeren** (`brew install supabase/tap/supabase`) — nodig om Edge Functions lokaal te kunnen testen en deployen.
-5. **Env-secrets configureren** in Supabase dashboard: `HF_TOKEN`. Eén waarde, één keer.
-6. **Eindreview**: na elke stap die ik oplever, kort kijken of het zinvol aanvoelt voordat we doorgaan.
+3. **Supabase CLI installeren** (`brew install supabase/tap/supabase`) — nodig om Edge Functions lokaal te kunnen testen en deployen.
+4. **Env-secrets configureren** in Supabase dashboard: `HF_TOKEN`. Eén waarde, één keer.
+5. **Eindreview** na elke stap die ik oplever — kort kijken of het zinvol aanvoelt voordat we doorgaan.
 
 ---
 
 ## Wat ik doe (~1 dag werk, opgesplitst in stappen)
 
-### Stap 1 — Feature-extractie uitbreiden in `preprocess.mjs`
+### Stap 1 — Feature-extractie + label uitbreiden in `preprocess.mjs`
 
-Per debiteur extra velden produceren die we als features naar TabPFN sturen:
-- avgDaysLate (al berekend)
-- pctOverdue, oldestDays (al berekend)
-- pctOmzet (al berekend)
+Per debiteur features produceren die we als training-input naar TabPFN sturen. Bewust **alleen niet-label-leaky features** opnemen:
+- avgDaysLate (historisch, al berekend)
 - intervals_observed, cv (al berekend)
 - Mann-Kendall tau + p_value (al berekend)
-- pattern_type one-hot (nieuw, maar triviaal)
-- aantal facturen, gemiddeld factuurbedrag, jaaromzet (nieuw, eenvoudig)
-- **`is_wanbetaler` label** volgens de gekozen definitie (nieuw — bepaalt welke definitie we gebruiken)
+- pattern_type one-hot encoded (nieuw, triviaal)
+- pctOmzet (al berekend)
+- aantal facturen totaal, gemiddeld factuurbedrag, jaaromzet per debiteur (nieuw, eenvoudig)
 
-Output: extra veld `debiteur_features` in `data.generated.json` per debiteur.
+Bewust **niet** als feature: `pctOverdue`, `oldestDays`, en alles wat direct uit de huidige open-postenstand komt — die zijn definitiegelijk aan het label en zouden tot zelf-voorspelling leiden.
+
+Plus per debiteur het label:
+- **`is_wanbetaler`**: `true` als de debiteur op snapshot-datum minstens één open factuur heeft met `vervaldatum < snapshot`.
+
+Output: extra veld `debiteur_features` (object) en `is_wanbetaler` (boolean) in `data.generated.json` per debiteur.
 
 ### Stap 2 — Supabase Edge Function
 
@@ -107,15 +107,14 @@ De huidige `betaalgedrag`-aggregaat bevat DSO + trend + volatiliteit. Wanbetaler
 | # | Wie | Stap | Wachten op |
 |---|---|---|---|
 | 1 | Jij | Supabase project + HF token aanmaken | — |
-| 2 | Jij | Definitie wanbetaler kiezen | — |
-| 3 | Ik | Feature-extractie + label in preprocess | #2 |
-| 4 | Ik | Edge Function code schrijven (lokaal testbaar) | — (parallel) |
-| 5 | Jij | Supabase CLI installeren, project linken, `HF_TOKEN` als secret | #1 |
-| 6 | Ik | Edge Function deployen via CLI | #5 |
-| 7 | Ik | Frontend integratie + UI | #3, #6 |
-| 8 | Samen | Testen op handvol debiteuren + tunen | #7 |
+| 2 | Ik | Feature-extractie + label in preprocess | — |
+| 3 | Ik | Edge Function code schrijven (lokaal testbaar) | — (parallel met #2) |
+| 4 | Jij | Supabase CLI installeren, project linken, `HF_TOKEN` als secret | #1 |
+| 5 | Ik | Edge Function deployen via CLI | #4 |
+| 6 | Ik | Frontend integratie + UI | #2, #5 |
+| 7 | Samen | Testen op handvol debiteuren + tunen | #6 |
 
-#3 en #4 kunnen parallel. Globaal verwacht ik dit kost één werkdag mijn kant + die 30 minuten van jou verspreid over een paar momenten.
+#2 en #3 kunnen parallel. Globaal verwacht ik dit kost één werkdag mijn kant + die 30 minuten van jou verspreid over een paar momenten.
 
 ---
 
