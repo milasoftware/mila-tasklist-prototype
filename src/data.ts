@@ -33,6 +33,7 @@ export type Task = {
   aanleiding: string
   factuurnummer?: string
   bedrag?: number
+  gerelateerde_facturen?: string[]
   priority: number
   impact: {
     score: number
@@ -129,3 +130,20 @@ export const debiteuren: Debiteur[] = generated.debiteuren as Debiteur[]
 export const facturen: Factuur[] = generated.facturen as Factuur[]
 export const betalingen: Betaling[] = generated.betalingen as Betaling[]
 export const meta: Meta = generated.meta as Meta
+
+// Lookup-helpers — gebruikt door UI voor het renderen van debiteur-historie
+// in het detailpaneel.
+const debiteurById = new Map(debiteuren.map((d) => [d.id, d]))
+const factuurById = new Map(facturen.map((f) => [f.id, f]))
+const facturenByDebiteur = new Map<string, Factuur[]>()
+for (const f of facturen) {
+  if (!facturenByDebiteur.has(f.debiteurnummer)) facturenByDebiteur.set(f.debiteurnummer, [])
+  facturenByDebiteur.get(f.debiteurnummer)!.push(f)
+}
+
+export const getDebiteur = (id: string): Debiteur | undefined => debiteurById.get(id)
+export const getFactuur = (id: string): Factuur | undefined => factuurById.get(id)
+export const getFacturen = (ids: string[]): Factuur[] =>
+  ids.map((id) => factuurById.get(id)).filter((f): f is Factuur => f !== undefined)
+export const getFacturenVoorDebiteur = (debiteurnummer: string): Factuur[] =>
+  facturenByDebiteur.get(debiteurnummer) ?? []

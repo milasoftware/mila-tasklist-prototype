@@ -1,5 +1,22 @@
 import { useState } from 'react'
-import { tasks, TYPE_LABEL, EFFECT_LABEL, meta, type Task } from './data'
+import {
+  tasks,
+  TYPE_LABEL,
+  EFFECT_LABEL,
+  meta,
+  getDebiteur,
+  getFacturen,
+  getFacturenVoorDebiteur,
+  type Task,
+  type TaskType,
+  type Factuur,
+} from './data'
+
+type TaskFilter = 'all' | TaskType
+
+const SNAPSHOT = new Date(meta.snapshot_datum)
+const daysOverdue = (vervaldatum: string) =>
+  Math.floor((SNAPSHOT.getTime() - new Date(vervaldatum).getTime()) / 86400000)
 
 const WEIGHTS = { impact: 0.4, urgentie: 0.3, risico: 0.2, potentieel: 0.1 }
 
@@ -64,6 +81,7 @@ function SourceLine({ children }: { children: React.ReactNode }) {
 }
 
 function TaskRow({ task, selected, onClick }: { task: Task; selected: boolean; onClick: () => void }) {
+  const factuurCount = task.gerelateerde_facturen?.length ?? (task.factuurnummer ? 1 : 0)
   return (
     <button
       onClick={onClick}
@@ -88,12 +106,174 @@ function TaskRow({ task, selected, onClick }: { task: Task; selected: boolean; o
             <span className="text-xs text-slate-500 uppercase tracking-wide shrink-0">
               {TYPE_LABEL[task.type]}
             </span>
+            {factuurCount > 1 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 tabular-nums shrink-0">
+                {factuurCount} facturen
+              </span>
+            )}
           </div>
           <p className="text-sm text-slate-700 mt-0.5 truncate">{task.taakomschrijving}</p>
           <p className="text-xs text-slate-500 mt-1 truncate">{task.aanleiding}</p>
         </div>
       </div>
     </button>
+  )
+}
+
+function statusTone(status: Factuur['status']) {
+  if (status === 'betaald') return 'bg-emerald-50 text-emerald-700'
+  if (status === 'open') return 'bg-amber-50 text-amber-800'
+  return 'bg-slate-100 text-slate-600'
+}
+
+function FactuurTable({
+  facturen,
+  highlightIds,
+  showOnlyOpen,
+}: {
+  facturen: Factuur[]
+  highlightIds?: Set<string>
+  showOnlyOpen?: boolean
+}) {
+  const list = showOnlyOpen ? facturen.filter((f) => f.status === 'open') : facturen
+  // Open posten eerst, daarbinnen oudste vervaldatum eerst, betaalde daarna recent eerst
+  const sorted = [...list].sort((a, b) => {
+    if (a.status !== b.status) {
+      if (a.status === 'open') return -1
+      if (b.status === 'open') return 1
+    }
+    return a.status === 'open'
+      ? a.vervaldatum.localeCompare(b.vervaldatum)
+      : b.factuurdatum.localeCompare(a.factuurdatum)
+  })
+  if (sorted.length === 0) {
+    return <p className="text-sm text-slate-500 italic">Geen facturen om te tonen.</p>
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-slate-500 border-b border-slate-200">
+            <th className="py-1.5 pr-2 font-medium">Factuur</th>
+            <th className="py-1.5 pr-2 font-medium">Vervalt</th>
+            <th className="py-1.5 pr-2 font-medium text-right">Bedrag</th>
+            <th className="py-1.5 pr-2 font-medium text-right">Open</th>
+            <th className="py-1.5 pr-2 font-medium">Status</th>
+            <th className="py-1.5 font-medium text-right">Verv.</th>
+          </tr>
+        </thead>
+        <tbody className="text-slate-700">
+          {sorted.map((f) => {
+            const overdue = f.status === 'open' ? daysOverdue(f.vervaldatum) : null
+            const isHighlight = highlightIds?.has(f.id)
+            return (
+              <tr
+                key={f.id}
+                className={`border-b border-slate-50 last:border-0 ${isHighlight ? 'bg-amber-50/50' : ''}`}
+              >
+                <td className="py-1.5 pr-2 font-mono tabular-nums">{f.id}</td>
+                <td className="py-1.5 pr-2 tabular-nums text-slate-500">{f.vervaldatum}</td>
+                <td className="py-1.5 pr-2 tabular-nums text-right">{fmtEUR(f.bedrag)}</td>
+                <td className="py-1.5 pr-2 tabular-nums text-right">
+                  {f.openstaand === 0 ? <span className="text-slate-300">—</span> : fmtEUR(f.openstaand)}
+                </td>
+                <td className="py-1.5 pr-2">
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] ${statusTone(f.status)}`}>
+                    {f.status === 'betaald' ? 'betaald' : f.status === 'open' ? 'open' : 'credit'}
+                  </span>
+                </td>
+                <td className="py-1.5 tabular-nums text-right">
+                  {overdue !== null && overdue > 0 ? (
+                    <span className="text-amber-700">+{overdue}d</span>
+                  ) : overdue !== null && overdue <= 0 ? (
+                    <span className="text-slate-400">{overdue}d</span>
+                  ) : (
+                    <span className="text-slate-300">—</span>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function DebtorContext({ task, showSources }: { task: Task; showSources: boolean }) {
+  if (!task.debiteurnummer) return null
+  const deb = getDebiteur(task.debiteurnummer)
+  const all = getFacturenVoorDebiteur(task.debiteurnummer)
+  if (all.length === 0) return null
+
+  const open = all.filter((f) => f.status === 'open')
+  const openSum = open.reduce((s, f) => s + f.openstaand, 0)
+  const overdueOpen = open.filter((f) => daysOverdue(f.vervaldatum) > 0)
+  const oudste = overdueOpen.reduce(
+    (max, f) => Math.max(max, daysOverdue(f.vervaldatum)),
+    0,
+  )
+
+  const taakFacturen = task.gerelateerde_facturen
+    ? getFacturen(task.gerelateerde_facturen)
+    : task.factuurnummer
+      ? getFacturen([task.factuurnummer])
+      : []
+  const taakIds = new Set(taakFacturen.map((f) => f.id))
+
+  return (
+    <section className="border border-slate-200 rounded-md p-4">
+      <div className="flex items-baseline justify-between mb-3">
+        <h4 className="font-medium text-slate-900">Debiteur-context</h4>
+        <span className="text-xs text-slate-500">{deb?.plaats ?? task.debiteurnummer}</span>
+      </div>
+
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mb-4">
+        {deb?.accountmanager && (
+          <>
+            <dt className="text-slate-500">Accountmanager</dt>
+            <dd className="text-slate-700">{deb.accountmanager}</dd>
+          </>
+        )}
+        <dt className="text-slate-500">Open posten</dt>
+        <dd className="text-slate-700 tabular-nums">
+          {open.length} · totaal {fmtEUR(openSum)}
+        </dd>
+        <dt className="text-slate-500">Waarvan vervallen</dt>
+        <dd className="text-slate-700 tabular-nums">
+          {overdueOpen.length}
+          {oudste > 0 ? <> · oudste {oudste}d</> : null}
+        </dd>
+        <dt className="text-slate-500">Historie</dt>
+        <dd className="text-slate-700 tabular-nums">
+          {all.length} facturen, {all.filter((f) => f.status === 'betaald').length} betaald
+        </dd>
+      </dl>
+
+      {taakFacturen.length > 0 && (
+        <>
+          <p className="text-xs uppercase tracking-wide text-slate-500 mb-1.5">
+            Onderliggende facturen voor deze taak ({taakFacturen.length})
+          </p>
+          <FactuurTable facturen={taakFacturen} highlightIds={taakIds} />
+        </>
+      )}
+
+      {open.length > taakFacturen.length && (
+        <>
+          <p className="text-xs uppercase tracking-wide text-slate-500 mt-4 mb-1.5">
+            Alle open posten ({open.length})
+          </p>
+          <FactuurTable facturen={open} highlightIds={taakIds} />
+        </>
+      )}
+
+      {showSources && (
+        <SourceLine>
+          debiteur.* (NAW + accountmanager), factuur (alle posten), betaling (gekoppeld via factuurnummer)
+        </SourceLine>
+      )}
+    </section>
   )
 }
 
@@ -152,6 +332,8 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           <span className="text-sm">priority score (0–5)</span>
         </div>
       </div>
+
+      <DebtorContext task={task} showSources={showSources} />
 
       <ComponentBlock title="Impact" weight={WEIGHTS.impact} score={task.impact.score}>
         {task.impact.bedrag !== undefined && (
@@ -305,7 +487,21 @@ export default function App() {
   const sorted = [...tasks].sort((a, b) => b.priority - a.priority)
   const [selectedId, setSelectedId] = useState<string>(sorted[0].id)
   const [showSources, setShowSources] = useState(false)
-  const selected = sorted.find((t) => t.id === selectedId) ?? sorted[0]
+  const [filter, setFilter] = useState<TaskFilter>('all')
+
+  // Tel taken per type — bouw tabs alleen voor types die voorkomen
+  const counts: Record<string, number> = { all: sorted.length }
+  for (const t of sorted) counts[t.type] = (counts[t.type] ?? 0) + 1
+  const tabs: { value: TaskFilter; label: string }[] = [
+    { value: 'all', label: 'Alle' },
+    ...(Object.keys(counts)
+      .filter((k) => k !== 'all')
+      .sort((a, b) => counts[b] - counts[a])
+      .map((k) => ({ value: k as TaskType, label: TYPE_LABEL[k as TaskType] }))),
+  ]
+
+  const visible = filter === 'all' ? sorted : sorted.filter((t) => t.type === filter)
+  const selected = visible.find((t) => t.id === selectedId) ?? visible[0] ?? sorted[0]
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
@@ -337,18 +533,53 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-6 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_28rem] gap-6">
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
-            {sorted.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                selected={task.id === selectedId}
-                onClick={() => setSelectedId(task.id)}
-              />
-            ))}
+            <nav className="flex border-b border-slate-200 bg-slate-50/50">
+              {tabs.map((tab) => {
+                const active = filter === tab.value
+                const count = counts[tab.value] ?? 0
+                return (
+                  <button
+                    key={tab.value}
+                    onClick={() => setFilter(tab.value)}
+                    className={`relative px-4 py-2.5 text-sm transition-colors ${
+                      active
+                        ? 'text-slate-900 font-medium'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    {tab.label}
+                    <span
+                      className={`ml-1.5 text-[11px] tabular-nums px-1.5 py-0.5 rounded ${
+                        active ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-600'
+                      }`}
+                    >
+                      {count}
+                    </span>
+                    {active && (
+                      <span className="absolute bottom-0 left-2 right-2 h-0.5 bg-slate-900 rounded-t" />
+                    )}
+                  </button>
+                )
+              })}
+            </nav>
+            {visible.length === 0 ? (
+              <p className="px-4 py-8 text-sm text-slate-500 text-center">
+                Geen taken in deze categorie.
+              </p>
+            ) : (
+              visible.map((task) => (
+                <TaskRow
+                  key={task.id}
+                  task={task}
+                  selected={task.id === selected?.id}
+                  onClick={() => setSelectedId(task.id)}
+                />
+              ))
+            )}
           </div>
 
           <aside className="bg-white rounded-md border border-slate-200 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-hidden">
-            <Detail task={selected} showSources={showSources} />
+            {selected && <Detail task={selected} showSources={showSources} />}
           </aside>
         </div>
       </main>
