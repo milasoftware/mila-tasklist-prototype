@@ -58,15 +58,13 @@ Drie van de vijf zijn dus gevuld; samen goed voor 65% van de oorspronkelijk bedo
 
 1. **Klein achterliggend rekenmodel opzetten** — voorwaarde voor de twee volgende punten.
 2. **Voorspelling van wanbetaling toevoegen.** Twee varianten waar we tussen kunnen kiezen:
-    - *Een bestaand statistisch model voor tabeldata (~halve dag).* AI-model dat speciaal is getraind om patronen in bedrijfsdata te herkennen (TabPFN is een bekende). We geven het Covebo's historie als referentiemateriaal mee; het kan dan zonder eigen training inschatten welke klanten op eerdere wanbetalers lijken. Beperkingen op hoeveelheid data tegelijk, en je bent afhankelijk van een externe partij die het model host.
-    - *Een eigen model trainen op Covebo-data (~1 dag, productieklaar).* We trainen zelf een model (XGBoost — industriestandaard in credit scoring) op Covebo's historische klanten met hun betaalgedrag. Precies afgestemd op Covebo's klantbestand, maar 1 jaar historie en ~1.000 actieve klanten is aan de magere kant — twee à drie jaar zou robuuster zijn.
+    - *Een bestaand statistisch model voor tabeldata.* AI-model dat speciaal is getraind om patronen in bedrijfsdata te herkennen (TabPFN is een bekende). We geven het Covebo's historie als referentiemateriaal mee; het kan dan zonder eigen training inschatten welke klanten op eerdere wanbetalers lijken. Beperkingen op hoeveelheid data tegelijk, en je bent afhankelijk van een externe partij die het model host.
+    - *Een eigen model trainen op Covebo-data.* We trainen zelf een model (XGBoost — industriestandaard in credit scoring) op Covebo's historische klanten met hun betaalgedrag. Precies afgestemd op Covebo's klantbestand, maar 1 jaar historie en ~1.000 actieve klanten is aan de magere kant — twee à drie jaar zou robuuster zijn.
 3. **AI-gegenereerde uitleg per taak.** Maakt de detailpagina rijker zonder dat het rekenmodel hoeft te veranderen.
 
 ---
 
-## Appendix — waarom deze twee methodes?
-
-Niet nodig om te lezen voor het grote plaatje. Bedoeld voor wie wil weten waarom de keuze viel op Mann-Kendall en de variatiecoëfficiënt in plaats van iets anders.
+## Appendix — waarom Mann-Kendall en Variatiecoëfficiënt (CV)?
 
 ### Mann-Kendall trend-test (voor "gaat het beter of slechter")
 
