@@ -1,8 +1,7 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   tasks,
   TYPE_LABEL,
-  EFFECT_LABEL,
   meta,
   getDebiteur,
   getFacturen,
@@ -13,6 +12,30 @@ import {
 } from './data'
 
 type TaskFilter = 'all' | TaskType
+
+// ----- Routing (hash-based, geen library) -----------------------------------
+
+type Route = { name: 'list' } | { name: 'detail'; taskId: string }
+
+function parseHash(): Route {
+  const hash = window.location.hash || '#/'
+  const m = hash.match(/^#\/taak\/(.+)$/)
+  if (m) return { name: 'detail', taskId: decodeURIComponent(m[1]) }
+  return { name: 'list' }
+}
+
+function useHashRoute(): [Route, (r: Route) => void] {
+  const [route, setRoute] = useState<Route>(parseHash)
+  useEffect(() => {
+    const onChange = () => setRoute(parseHash())
+    window.addEventListener('hashchange', onChange)
+    return () => window.removeEventListener('hashchange', onChange)
+  }, [])
+  const navigate = useCallback((r: Route) => {
+    window.location.hash = r.name === 'list' ? '/' : `/taak/${encodeURIComponent(r.taskId)}`
+  }, [])
+  return [route, navigate]
+}
 
 const SNAPSHOT = new Date(meta.snapshot_datum)
 const daysOverdue = (vervaldatum: string) =>
@@ -87,11 +110,122 @@ function ConfidencePill({ value }: { value: 'hoog' | 'middel' | 'geen' }) {
       : value === 'middel'
         ? 'bg-amber-50 text-amber-700 ring-amber-200'
         : 'bg-slate-100 text-slate-500 ring-slate-200'
-  return (
-    <span className={`text-[10px] px-1.5 py-0.5 rounded ring-1 ${tone}`}>
-      conf: {value}
-    </span>
-  )
+  const label =
+    value === 'hoog' ? 'zeker' : value === 'middel' ? 'redelijk zeker' : 'te weinig data'
+  return <span className={`text-[10px] px-1.5 py-0.5 rounded ring-1 ${tone}`}>{label}</span>
+}
+
+// Plain-language uitleg voor de priority-score (0-5).
+function priorityHint(p: number): string {
+  if (p >= 4) return 'Hoog — pak vandaag op'
+  if (p >= 3) return 'Middel — deze week oppakken'
+  if (p >= 2) return 'Laag — komende weken'
+  return 'Routine — geen haast'
+}
+
+// Plain-language voor effect-type. Vervangt de korte enum-waardes door
+// een mensvriendelijke beschrijving.
+function effectPlain(t: string): string {
+  switch (t) {
+    case 'directe_cash':
+      return 'direct geld binnen als de klant betaalt'
+    case 'versnelling':
+      return 'een eerdere betaling dan normaal'
+    case 'bescherming':
+      return 'voorkomt een verlies, geen directe cash'
+    case 'monitoring':
+      return 'observatie — geen directe opbrengst'
+    case 'administratief':
+      return 'datakwaliteit — geen directe opbrengst'
+    default:
+      return t
+  }
+}
+
+// Plain-language voor de Mann-Kendall trend-uitkomst. Toont alleen de
+// statistiek (Kendall τ, p-value) wanneer technische details aan staan.
+function trendPlain(
+  trend: {
+    label: string
+    confidence: 'hoog' | 'middel' | 'geen'
+    tau: number
+    p_value: number
+    months_observed: number
+    explanation: string
+  },
+  showTech: boolean,
+): string {
+  if (trend.confidence === 'geen') {
+    return trend.months_observed < 6
+      ? `Te weinig maanden met betaalactiviteit (${trend.months_observed}) om dit te bepalen.`
+      : `Geen duidelijke richting — betaalgedrag fluctueert.`
+  }
+  const base =
+    trend.label === 'sterk verslechterend'
+      ? `Betaalt steeds later — duidelijke verslechtering over ${trend.months_observed} maanden.`
+      : trend.label === 'verslechterend'
+        ? `Lijkt iets later te zijn gaan betalen over ${trend.months_observed} maanden.`
+        : trend.label === 'stabiel'
+          ? `Betaalt al ${trend.months_observed} maanden ongeveer hetzelfde.`
+          : trend.label === 'verbeterend'
+            ? `Lijkt iets sneller te betalen dan een paar maanden terug.`
+            : trend.label === 'sterk verbeterend'
+              ? `Betaalt duidelijk sneller dan ${trend.months_observed} maanden geleden.`
+              : trend.explanation
+  return showTech ? `${base} (Kendall τ=${trend.tau}, p=${trend.p_value})` : base
+}
+
+// Plain-language voor de coefficient of variation uitkomst.
+function volatiliteitPlain(
+  vol: {
+    label: string
+    confidence: 'hoog' | 'middel' | 'geen'
+    cv: number
+    intervals_observed: number
+    explanation: string
+  },
+  showTech: boolean,
+): string {
+  if (vol.confidence === 'geen') {
+    return `Te weinig betalingen (${vol.intervals_observed} intervallen) om de regelmaat te bepalen.`
+  }
+  const base =
+    vol.label === 'zeer regelmatig'
+      ? `Betaalt heel constant in zijn timing.`
+      : vol.label === 'regelmatig'
+        ? `Betaalt redelijk constant in zijn timing.`
+        : vol.label === 'wisselend'
+          ? `Wisselend in timing — niet altijd op hetzelfde moment.`
+          : vol.label === 'onregelmatig'
+            ? `Onvoorspelbaar — soms lang niets, dan ineens veel.`
+            : vol.label === 'zeer grillig'
+              ? `Heel grillig — komt soms geclusterd in pieken.`
+              : vol.explanation
+  return showTech
+    ? `${base} (CV=${vol.cv} over ${vol.intervals_observed} betaalintervallen)`
+    : base
+}
+
+// Plain-language voor de pattern-detectie uitkomst.
+function patternPlain(p: {
+  pattern_type: 'maandelijks' | 'einde_maand' | 'wekelijks' | 'interval' | 'geen'
+  pattern_value: string | null
+  fit_pct: number
+  payments_observed: number
+  confidence: 'hoog' | 'middel' | 'geen'
+}): string {
+  if (p.pattern_type === 'geen' || !p.pattern_value) {
+    return `Geen duidelijk betaalmoment — komt onregelmatig binnen.`
+  }
+  const where =
+    p.pattern_type === 'wekelijks'
+      ? `vooral op ${p.pattern_value}`
+      : p.pattern_type === 'einde_maand'
+        ? `rond einde of begin van de maand`
+        : p.pattern_type === 'maandelijks'
+          ? p.pattern_value
+          : p.pattern_value
+  return `Betaalt meestal ${where} — gebeurde zo bij ${p.fit_pct}% van ${p.payments_observed} betalingen.`
 }
 
 function TaskRow({ task, selected, onClick }: { task: Task; selected: boolean; onClick: () => void }) {
@@ -293,23 +427,30 @@ function DebtorContext({ task, showSources }: { task: Task; showSources: boolean
 
 function ComponentBlock({
   title,
+  subtitle,
   weight,
   score,
   children,
 }: {
   title: string
+  subtitle?: string
   weight: number
   score: number
   children: React.ReactNode
 }) {
   return (
     <section className="border border-slate-200 rounded-md p-4">
-      <div className="flex items-baseline justify-between mb-3">
-        <h4 className="font-medium text-slate-900">
-          {title}
-          <span className="ml-2 text-xs text-slate-500 font-normal">weging {fmtNL(weight, 1)}</span>
-        </h4>
-        <div className="text-right">
+      <div className="flex items-baseline justify-between mb-3 gap-3">
+        <div>
+          <h4 className="font-medium text-slate-900">
+            {title}
+            <span className="ml-2 text-xs text-slate-500 font-normal">
+              telt voor {Math.round(weight * 100)}%
+            </span>
+          </h4>
+          {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
+        </div>
+        <div className="text-right shrink-0">
           <span className="text-2xl font-semibold tabular-nums text-slate-900">
             {fmtNL(score, score % 1 === 0 ? 0 : 1)}
           </span>
@@ -332,7 +473,7 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
   const total = calc.impact + calc.urgentie + calc.risico + calc.potentieel
 
   return (
-    <div className="p-6 space-y-5 overflow-y-auto h-full">
+    <div className="p-6 space-y-5">
       <header>
         <p className="text-xs text-slate-500 uppercase tracking-wide">{TYPE_LABEL[task.type]}</p>
         <h2 className="text-xl font-semibold text-slate-900 mt-1">{task.debiteur}</h2>
@@ -343,38 +484,56 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
       <div className={`rounded-md ring-1 p-4 ${priorityTone(task.priority)}`}>
         <div className="flex items-baseline gap-3">
           <span className="text-3xl font-semibold tabular-nums">{fmtNL(task.priority, 2)}</span>
-          <span className="text-sm">priority score (0–5)</span>
+          <span className="text-sm">van 5 — {priorityHint(task.priority)}</span>
         </div>
+        <p className="text-xs mt-1 opacity-80">
+          Mila scoort elke taak op vier punten. Hieronder zie je hoe deze taak op elk punt scoort.
+        </p>
       </div>
 
       <DebtorContext task={task} showSources={showSources} />
 
-      <ComponentBlock title="Impact" weight={WEIGHTS.impact} score={task.impact.score}>
+      <ComponentBlock
+        title="Hoeveel levert dit op?"
+        subtitle="Hoe groot het bedrag is en wat de actie oplevert."
+        weight={WEIGHTS.impact}
+        score={task.impact.score}
+      >
         {task.impact.bedrag !== undefined && (
           <p>
-            <span className="text-slate-500">Bedrag: </span>
+            <span className="text-slate-500">Bedrag dat hiermee binnenkomt: </span>
             {fmtEUR(task.impact.bedrag)}
-            {task.impact.pct_van_ar !== undefined && (
-              <> ({fmtNL(task.impact.pct_van_ar, 1)}% van openstaande AR)</>
+            {showSources && task.impact.pct_van_ar !== undefined && (
+              <span className="text-slate-400">
+                {' '}
+                ({fmtNL(task.impact.pct_van_ar, 1)}% van totaal openstaand)
+              </span>
             )}
           </p>
         )}
         <p>
-          <span className="text-slate-500">Effect-type: </span>
-          {EFFECT_LABEL[task.impact.effect_type]}
+          <span className="text-slate-500">Wat het oplevert: </span>
+          {effectPlain(task.impact.effect_type)}
         </p>
-        <ScoreRow label="Bedrag-score" score={task.impact.bedrag_score} />
-        <ScoreRow label="Effect-score" score={task.impact.effect_score} max={2} />
-        <p className="text-slate-600 pt-1">{task.impact.explanation}</p>
         {showSources && (
-          <SourceLine>
-            factuur.openstaand_bedrag (deze taak), SUM(factuur.openstaand_bedrag) over open AR,
-            AI-effect-classificatie op taak.type + factuur-context
-          </SourceLine>
+          <>
+            <ScoreRow label="Score voor bedrag" score={task.impact.bedrag_score} />
+            <ScoreRow label="Score voor type" score={task.impact.effect_score} max={2} />
+            <p className="text-slate-500 text-xs pt-1">{task.impact.explanation}</p>
+            <SourceLine>
+              factuur.openstaand_bedrag (deze taak), SUM(factuur.openstaand_bedrag) over open AR,
+              effect-classificatie op taak.type + factuur-context
+            </SourceLine>
+          </>
         )}
       </ComponentBlock>
 
-      <ComponentBlock title="Urgentie" weight={WEIGHTS.urgentie} score={task.urgentie.score}>
+      <ComponentBlock
+        title="Hoe dringend is dit?"
+        subtitle="Hoeveel tijd er al voorbij is sinds de afspraak."
+        weight={WEIGHTS.urgentie}
+        score={task.urgentie.score}
+      >
         <p className="text-slate-600">{task.urgentie.reden}</p>
         {showSources && (
           <SourceLine>
@@ -383,10 +542,14 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         )}
       </ComponentBlock>
 
-      <ComponentBlock title="Risico" weight={WEIGHTS.risico} score={task.risico.score}>
-        <p className="text-slate-500 text-xs uppercase tracking-wide">Categoriescores debiteur</p>
+      <ComponentBlock
+        title="Hoe risicovol is deze klant?"
+        subtitle="Wat we uit de historie weten over hoe deze klant zich gedraagt."
+        weight={WEIGHTS.risico}
+        score={task.risico.score}
+      >
         <ScoreRow
-          label="Betaalgedrag"
+          label="Hoe betaalt deze klant normaal"
           score={task.risico.betaalgedrag}
           source="betaling.betaaldatum vs factuur.vervaldatum (DSO), monthly-DSO-series (trend), betaalintervallen (volatiliteit)"
           showSource={showSources}
@@ -395,20 +558,21 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           <div className="ml-2 pl-3 border-l-2 border-slate-200 space-y-2.5 mt-1 mb-1">
             <div>
               <div className="flex items-center justify-between gap-2 text-xs">
-                <span className="text-slate-700">DSO</span>
+                <span className="text-slate-700">Hoeveel dagen gemiddeld te laat</span>
                 <span className="tabular-nums text-slate-700 shrink-0">
                   {task.risico.betaalgedrag_breakdown.dso.score} / 5
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                {task.risico.betaalgedrag_breakdown.dso.avg_days_late}d gem. te laat over{' '}
-                {task.risico.betaalgedrag_breakdown.dso.invoice_count} facturen.
+                Betaalt gemiddeld {task.risico.betaalgedrag_breakdown.dso.avg_days_late} dagen na de
+                vervaldatum, op basis van {task.risico.betaalgedrag_breakdown.dso.invoice_count}{' '}
+                facturen.
               </p>
             </div>
             <div>
               <div className="flex items-center justify-between gap-2 text-xs">
                 <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="text-slate-700">Trend</span>
+                  <span className="text-slate-700">Gaat het beter of slechter?</span>
                   <ConfidencePill value={task.risico.betaalgedrag_breakdown.trend.confidence} />
                 </div>
                 <span className="tabular-nums text-slate-700 shrink-0">
@@ -416,31 +580,33 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                {task.risico.betaalgedrag_breakdown.trend.explanation}
+                {trendPlain(task.risico.betaalgedrag_breakdown.trend, showSources)}
               </p>
             </div>
             <div>
               <div className="flex items-center justify-between gap-2 text-xs">
                 <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="text-slate-700">Volatiliteit</span>
-                  <ConfidencePill value={task.risico.betaalgedrag_breakdown.volatiliteit.confidence} />
+                  <span className="text-slate-700">Hoe voorspelbaar betaalt deze klant?</span>
+                  <ConfidencePill
+                    value={task.risico.betaalgedrag_breakdown.volatiliteit.confidence}
+                  />
                 </div>
                 <span className="tabular-nums text-slate-700 shrink-0">
                   {task.risico.betaalgedrag_breakdown.volatiliteit.score ?? '—'} / 5
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                {task.risico.betaalgedrag_breakdown.volatiliteit.explanation}
+                {volatiliteitPlain(task.risico.betaalgedrag_breakdown.volatiliteit, showSources)}
               </p>
             </div>
             <p className="text-[10px] text-slate-400 italic">
-              Wanbetaler-voorspelling nog niet beschikbaar (Fase 3). Aggregaat genormaliseerd over
-              beschikbare sub-scores.
+              We kunnen nog niet voorspellen óf deze klant gaat wanbetalen — dat komt in een latere
+              versie. De score hierboven is gebaseerd op wat we wél meten.
             </p>
           </div>
         )}
         <ScoreRow
-          label="Huidige stand"
+          label="Hoe staan we er nu voor"
           score={task.risico.huidige_stand}
           source="factuur.openstaand_bedrag, factuur.vervaldatum (% vervallen, oudste post)"
           showSource={showSources}
@@ -455,7 +621,7 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         )}
         {task.risico.krediet !== null && (
           <ScoreRow
-            label="Krediet"
+            label="Kredietverzekering"
             score={task.risico.krediet}
             source="krediet_dekking.gedekt_bedrag, krediet_event, externe_score (genormaliseerd)"
             showSource={showSources}
@@ -464,88 +630,113 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         {(task.risico.disputen === null || task.risico.krediet === null) && (
           <p className="text-xs text-slate-400 italic pt-1">
             {task.risico.disputen === null && task.risico.krediet === null
-              ? 'Disputen + Krediet niet beschikbaar in brondata — wegingen genormaliseerd over resterende categorieën.'
+              ? 'Disputen en kredietverzekering zitten niet in de aangeleverde data — die punten tellen daarom niet mee in de score.'
               : task.risico.disputen === null
-                ? 'Disputen niet beschikbaar in brondata.'
-                : 'Krediet niet beschikbaar in brondata.'}
+                ? 'Disputen zitten niet in de aangeleverde data.'
+                : 'Kredietverzekering zit niet in de aangeleverde data.'}
           </p>
         )}
         <ScoreRow
-          label="Omzetconcentratie"
+          label="Hoe belangrijk is deze klant voor ons"
           score={task.risico.omzetconcentratie}
           source="omzet_historie.omzet (aandeel debiteur in totale AR-scope)"
           showSource={showSources}
         />
       </ComponentBlock>
 
-      <ComponentBlock title="Potentieel" weight={WEIGHTS.potentieel} score={task.potentieel.score}>
-        <p>
-          <span className="text-slate-500">Werkelijk: </span>
-          {task.potentieel.werkelijke_dagen}d
-          <span className="text-slate-500"> · afgesproken: </span>
-          {task.potentieel.afgesproken_dagen}d
-          <span className="text-slate-500"> · verschil: </span>
-          {task.potentieel.werkelijke_dagen - task.potentieel.afgesproken_dagen}d
+      <ComponentBlock
+        title="Hoeveel sneller kan deze klant betalen?"
+        subtitle="Het verschil tussen wat is afgesproken en wat we in de praktijk zien."
+        weight={WEIGHTS.potentieel}
+        score={task.potentieel.score}
+      >
+        <p className="text-slate-600">
+          Deze klant betaalt normaal {task.potentieel.werkelijke_dagen} dagen na de factuurdatum.
+          Afgesproken is {task.potentieel.afgesproken_dagen} dagen — dus{' '}
+          <span className="font-medium text-slate-800">
+            {task.potentieel.werkelijke_dagen - task.potentieel.afgesproken_dagen} dagen langer
+          </span>{' '}
+          dan de afspraak.
         </p>
-        <p className="text-slate-600">{task.potentieel.reden}</p>
         {task.potentieel.pattern && (
           <div className="pt-2 border-t border-slate-100 mt-2">
             <div className="flex items-center justify-between gap-2 text-xs">
               <div className="flex items-center gap-1.5">
-                <span className="text-slate-700">Patroon</span>
+                <span className="text-slate-700">Wanneer betaalt deze klant meestal?</span>
                 <ConfidencePill value={task.potentieel.pattern.confidence} />
               </div>
-              <span className="text-slate-400 font-mono text-[10px]">
-                {task.potentieel.pattern.pattern_type}
-              </span>
+              {showSources && (
+                <span className="text-slate-400 font-mono text-[10px]">
+                  {task.potentieel.pattern.pattern_type}
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              {task.potentieel.pattern.explanation}
+              {patternPlain(task.potentieel.pattern)}
             </p>
           </div>
         )}
         {showSources && (
           <SourceLine>
-            standaard_betaaldag pattern recognition (clustering op factuur+betaling), debiteur.standaard_betaaltermijn
+            standaard_betaaldag pattern recognition (clustering op factuur+betaling),
+            debiteur.standaard_betaaltermijn
           </SourceLine>
         )}
       </ComponentBlock>
 
       <section className="border-t border-slate-200 pt-4">
-        <h4 className="font-medium text-slate-900 mb-2">Berekening</h4>
-        <div className="font-mono text-sm text-slate-700 leading-relaxed bg-slate-50 rounded p-3 overflow-x-auto">
-          <div>
-            ({fmtNL(task.impact.score, task.impact.score % 1 === 0 ? 0 : 1)} × {fmtNL(WEIGHTS.impact, 1)}) +{' '}
-            ({fmtNL(task.urgentie.score, 0)} × {fmtNL(WEIGHTS.urgentie, 1)}) +{' '}
-            ({fmtNL(task.risico.score, task.risico.score % 1 === 0 ? 0 : 1)} × {fmtNL(WEIGHTS.risico, 1)}) +{' '}
-            ({fmtNL(task.potentieel.score, 0)} × {fmtNL(WEIGHTS.potentieel, 1)})
-          </div>
-          <div className="text-slate-500">=</div>
-          <div>
-            {fmtNL(calc.impact, 2)} + {fmtNL(calc.urgentie, 2)} + {fmtNL(calc.risico, 2)} +{' '}
-            {fmtNL(calc.potentieel, 2)}
-          </div>
-          <div className="text-slate-500">=</div>
-          <div className="font-semibold">{fmtNL(total, 2)}</div>
+        <h4 className="font-medium text-slate-900 mb-1">Zo komt deze prioriteit tot stand</h4>
+        <p className="text-sm text-slate-600 mb-3">
+          Vier scores van 0 tot 5, elk met een eigen gewicht. Optellen geeft de prioriteit.
+        </p>
+        <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
+          <span className="text-slate-600">Hoeveel levert dit op</span>
+          <span className="text-slate-500">{fmtNL(task.impact.score, 1)}</span>
+          <span className="text-slate-400">× 40%</span>
+          <span className="text-slate-700 text-right">{fmtNL(calc.impact, 2)}</span>
+          <span className="text-slate-600">Hoe dringend</span>
+          <span className="text-slate-500">{fmtNL(task.urgentie.score, 0)}</span>
+          <span className="text-slate-400">× 30%</span>
+          <span className="text-slate-700 text-right">{fmtNL(calc.urgentie, 2)}</span>
+          <span className="text-slate-600">Hoe risicovol</span>
+          <span className="text-slate-500">{fmtNL(task.risico.score, 1)}</span>
+          <span className="text-slate-400">× 20%</span>
+          <span className="text-slate-700 text-right">{fmtNL(calc.risico, 2)}</span>
+          <span className="text-slate-600">Hoeveel sneller mogelijk</span>
+          <span className="text-slate-500">{fmtNL(task.potentieel.score, 0)}</span>
+          <span className="text-slate-400">× 10%</span>
+          <span className="text-slate-700 text-right">{fmtNL(calc.potentieel, 2)}</span>
+          <span className="text-slate-900 font-medium border-t border-slate-200 pt-1.5 mt-1">
+            Totaal
+          </span>
+          <span className="col-span-2 border-t border-slate-200 pt-1.5 mt-1"></span>
+          <span className="text-slate-900 font-semibold text-right border-t border-slate-200 pt-1.5 mt-1">
+            {fmtNL(total, 2)}
+          </span>
         </div>
+        {showSources && (
+          <p className="font-mono text-xs text-slate-400 mt-3">
+            ({fmtNL(task.impact.score, 1)} × 0,4) + ({fmtNL(task.urgentie.score, 0)} × 0,3) + (
+            {fmtNL(task.risico.score, 1)} × 0,2) + ({fmtNL(task.potentieel.score, 0)} × 0,1) ={' '}
+            {fmtNL(total, 2)}
+          </p>
+        )}
       </section>
 
       <section className="border-t border-slate-100 pt-4 text-slate-400">
-        <h4 className="text-xs uppercase tracking-wide font-medium mb-2">
-          Nog niet zichtbaar in deze view
-        </h4>
+        <h4 className="text-xs uppercase tracking-wide font-medium mb-2">Wat nog niet meedoet</h4>
         <ul className="text-xs space-y-1 leading-relaxed">
           <li>
-            <span className="font-medium">Risico → Betaalgedrag → AI-wanbetaler</span> · voorspelling
-            van dagen vertraging + confidence (Fase 3 — vereist serverless inference)
+            <span className="font-medium text-slate-500">Voorspellen of een klant wanbetaalt</span>{' '}
+            · komt in een latere fase (vereist een klein achterliggend rekenmodel).
           </li>
           <li>
-            <span className="font-medium">Rijke AI-uitleg per component</span> · LLM-generated tekst
-            i.p.v. templates (Fase 2 — vereist serverless API call)
+            <span className="font-medium text-slate-500">Uitgebreidere uitleg per component</span> ·
+            nu standaardtekst, later met AI verrijkt.
           </li>
           <li>
-            <span className="font-medium">Impact → Effect-classificatie</span> · contextuele
-            beoordeling i.p.v. regels op taak.type (kan met LLM, Fase 2)
+            <span className="font-medium text-slate-500">Slimmere inschatting type opbrengst</span>{' '}
+            · nu volgens vaste regels op het taaktype.
           </li>
         </ul>
       </section>
@@ -553,106 +744,200 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
   )
 }
 
-export default function App() {
-  const sorted = [...tasks].sort((a, b) => b.priority - a.priority)
-  const [selectedId, setSelectedId] = useState<string>(sorted[0].id)
-  const [showSources, setShowSources] = useState(false)
-  const [filter, setFilter] = useState<TaskFilter>('all')
+function AppHeader({
+  showSources,
+  setShowSources,
+  rightSlot,
+}: {
+  showSources: boolean
+  setShowSources: (b: boolean) => void
+  rightSlot?: React.ReactNode
+}) {
+  return (
+    <header className="bg-white border-b border-slate-200">
+      <div className="max-w-7xl mx-auto px-6 py-4 flex items-baseline justify-between gap-4">
+        <div>
+          <a href="#/" className="text-lg font-semibold text-slate-900 hover:text-slate-700">
+            Mila
+          </a>
+          <p className="text-sm text-slate-500">
+            Geprioriteerde takenlijst · {meta.administratie} · snapshot {meta.snapshot_datum}
+          </p>
+        </div>
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showSources}
+              onChange={(e) => setShowSources(e.target.checked)}
+              className="rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+            />
+            Toon technische details
+          </label>
+          {rightSlot}
+        </div>
+      </div>
+    </header>
+  )
+}
 
-  // Tel taken per type — bouw tabs alleen voor types die voorkomen
+function ListView({
+  sorted,
+  filter,
+  setFilter,
+  showSources,
+  setShowSources,
+  onSelectTask,
+}: {
+  sorted: Task[]
+  filter: TaskFilter
+  setFilter: (f: TaskFilter) => void
+  showSources: boolean
+  setShowSources: (b: boolean) => void
+  onSelectTask: (id: string) => void
+}) {
   const counts: Record<string, number> = { all: sorted.length }
   for (const t of sorted) counts[t.type] = (counts[t.type] ?? 0) + 1
   const tabs: { value: TaskFilter; label: string }[] = [
     { value: 'all', label: 'Alle' },
-    ...(Object.keys(counts)
+    ...Object.keys(counts)
       .filter((k) => k !== 'all')
       .sort((a, b) => counts[b] - counts[a])
-      .map((k) => ({ value: k as TaskType, label: TYPE_LABEL[k as TaskType] }))),
+      .map((k) => ({ value: k as TaskType, label: TYPE_LABEL[k as TaskType] })),
   ]
-
   const visible = filter === 'all' ? sorted : sorted.filter((t) => t.type === filter)
-  const selected = visible.find((t) => t.id === selectedId) ?? visible[0] ?? sorted[0]
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-baseline justify-between gap-4">
-          <div>
-            <h1 className="text-lg font-semibold">Mila</h1>
-            <p className="text-sm text-slate-500">
-              Geprioriteerde takenlijst · {meta.administratie} · snapshot {meta.snapshot_datum}
-            </p>
-          </div>
-          <div className="flex items-center gap-4">
-            <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={showSources}
-                onChange={(e) => setShowSources(e.target.checked)}
-                className="rounded border-slate-300 text-slate-900 focus:ring-slate-400"
-              />
-              Toon data-bronnen
-            </label>
-            <p className="text-sm text-slate-500 tabular-nums">
-              top {sorted.length} van {meta.total_taken_gegenereerd} taken
-            </p>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-6 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
-            <nav className="flex border-b border-slate-200 bg-slate-50/50">
-              {tabs.map((tab) => {
-                const active = filter === tab.value
-                const count = counts[tab.value] ?? 0
-                return (
-                  <button
-                    key={tab.value}
-                    onClick={() => setFilter(tab.value)}
-                    className={`relative px-4 py-2.5 text-sm transition-colors ${
-                      active
-                        ? 'text-slate-900 font-medium'
-                        : 'text-slate-500 hover:text-slate-700'
+    <>
+      <AppHeader
+        showSources={showSources}
+        setShowSources={setShowSources}
+        rightSlot={
+          <p className="text-sm text-slate-500 tabular-nums">
+            top {sorted.length} van {meta.total_taken_gegenereerd} taken
+          </p>
+        }
+      />
+      <main className="max-w-5xl mx-auto px-6 py-6">
+        <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
+          <nav className="flex border-b border-slate-200 bg-slate-50/50">
+            {tabs.map((tab) => {
+              const active = filter === tab.value
+              const count = counts[tab.value] ?? 0
+              return (
+                <button
+                  key={tab.value}
+                  onClick={() => setFilter(tab.value)}
+                  className={`relative px-4 py-2.5 text-sm transition-colors ${
+                    active ? 'text-slate-900 font-medium' : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  {tab.label}
+                  <span
+                    className={`ml-1.5 text-[11px] tabular-nums px-1.5 py-0.5 rounded ${
+                      active ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-600'
                     }`}
                   >
-                    {tab.label}
-                    <span
-                      className={`ml-1.5 text-[11px] tabular-nums px-1.5 py-0.5 rounded ${
-                        active ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-600'
-                      }`}
-                    >
-                      {count}
-                    </span>
-                    {active && (
-                      <span className="absolute bottom-0 left-2 right-2 h-0.5 bg-slate-900 rounded-t" />
-                    )}
-                  </button>
-                )
-              })}
-            </nav>
-            {visible.length === 0 ? (
-              <p className="px-4 py-8 text-sm text-slate-500 text-center">
-                Geen taken in deze categorie.
-              </p>
-            ) : (
-              visible.map((task) => (
-                <TaskRow
-                  key={task.id}
-                  task={task}
-                  selected={task.id === selected?.id}
-                  onClick={() => setSelectedId(task.id)}
-                />
-              ))
-            )}
-          </div>
-
-          <aside className="bg-white rounded-md border border-slate-200 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-hidden">
-            {selected && <Detail task={selected} showSources={showSources} />}
-          </aside>
+                    {count}
+                  </span>
+                  {active && (
+                    <span className="absolute bottom-0 left-2 right-2 h-0.5 bg-slate-900 rounded-t" />
+                  )}
+                </button>
+              )
+            })}
+          </nav>
+          {visible.length === 0 ? (
+            <p className="px-4 py-8 text-sm text-slate-500 text-center">
+              Geen taken in deze categorie.
+            </p>
+          ) : (
+            visible.map((task) => (
+              <TaskRow
+                key={task.id}
+                task={task}
+                selected={false}
+                onClick={() => onSelectTask(task.id)}
+              />
+            ))
+          )}
         </div>
       </main>
+    </>
+  )
+}
+
+function DetailView({
+  task,
+  showSources,
+  setShowSources,
+  onBack,
+}: {
+  task: Task
+  showSources: boolean
+  setShowSources: (b: boolean) => void
+  onBack: () => void
+}) {
+  return (
+    <>
+      <AppHeader showSources={showSources} setShowSources={setShowSources} />
+      <main className="max-w-3xl mx-auto px-6 py-6">
+        <button
+          onClick={onBack}
+          className="text-sm text-slate-600 hover:text-slate-900 mb-4 flex items-center gap-1"
+        >
+          <span aria-hidden>←</span> Terug naar takenlijst
+        </button>
+        <div className="bg-white rounded-md border border-slate-200">
+          <Detail task={task} showSources={showSources} />
+        </div>
+      </main>
+    </>
+  )
+}
+
+export default function App() {
+  const sorted = [...tasks].sort((a, b) => b.priority - a.priority)
+  const [showSources, setShowSources] = useState(false)
+  const [filter, setFilter] = useState<TaskFilter>('all')
+  const [route, navigate] = useHashRoute()
+
+  // Scroll naar top bij elke route-wissel
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [route])
+
+  const containerClasses = 'min-h-screen bg-slate-100 text-slate-900'
+
+  if (route.name === 'detail') {
+    const task = sorted.find((t) => t.id === route.taskId)
+    if (!task) {
+      // Onbekende taak-id — terug naar lijst
+      navigate({ name: 'list' })
+      return null
+    }
+    return (
+      <div className={containerClasses}>
+        <DetailView
+          task={task}
+          showSources={showSources}
+          setShowSources={setShowSources}
+          onBack={() => navigate({ name: 'list' })}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className={containerClasses}>
+      <ListView
+        sorted={sorted}
+        filter={filter}
+        setFilter={setFilter}
+        showSources={showSources}
+        setShowSources={setShowSources}
+        onSelectTask={(id) => navigate({ name: 'detail', taskId: id })}
+      />
     </div>
   )
 }
