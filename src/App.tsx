@@ -80,6 +80,20 @@ function SourceLine({ children }: { children: React.ReactNode }) {
   )
 }
 
+function ConfidencePill({ value }: { value: 'hoog' | 'middel' | 'geen' }) {
+  const tone =
+    value === 'hoog'
+      ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+      : value === 'middel'
+        ? 'bg-amber-50 text-amber-700 ring-amber-200'
+        : 'bg-slate-100 text-slate-500 ring-slate-200'
+  return (
+    <span className={`text-[10px] px-1.5 py-0.5 rounded ring-1 ${tone}`}>
+      conf: {value}
+    </span>
+  )
+}
+
 function TaskRow({ task, selected, onClick }: { task: Task; selected: boolean; onClick: () => void }) {
   const factuurCount = task.gerelateerde_facturen?.length ?? (task.factuurnummer ? 1 : 0)
   return (
@@ -374,9 +388,57 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         <ScoreRow
           label="Betaalgedrag"
           score={task.risico.betaalgedrag}
-          source="betaling.betaaldatum vs factuur.vervaldatum (DSO), omzet_historie (AI trend/volatiliteit), betalingsregeling (wanbetaler)"
+          source="betaling.betaaldatum vs factuur.vervaldatum (DSO), monthly-DSO-series (trend), betaalintervallen (volatiliteit)"
           showSource={showSources}
         />
+        {task.risico.betaalgedrag_breakdown && (
+          <div className="ml-2 pl-3 border-l-2 border-slate-200 space-y-2.5 mt-1 mb-1">
+            <div>
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-slate-700">DSO</span>
+                <span className="tabular-nums text-slate-700 shrink-0">
+                  {task.risico.betaalgedrag_breakdown.dso.score} / 5
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {task.risico.betaalgedrag_breakdown.dso.avg_days_late}d gem. te laat over{' '}
+                {task.risico.betaalgedrag_breakdown.dso.invoice_count} facturen.
+              </p>
+            </div>
+            <div>
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-slate-700">Trend</span>
+                  <ConfidencePill value={task.risico.betaalgedrag_breakdown.trend.confidence} />
+                </div>
+                <span className="tabular-nums text-slate-700 shrink-0">
+                  {task.risico.betaalgedrag_breakdown.trend.score ?? '—'} / 5
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {task.risico.betaalgedrag_breakdown.trend.explanation}
+              </p>
+            </div>
+            <div>
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-slate-700">Volatiliteit</span>
+                  <ConfidencePill value={task.risico.betaalgedrag_breakdown.volatiliteit.confidence} />
+                </div>
+                <span className="tabular-nums text-slate-700 shrink-0">
+                  {task.risico.betaalgedrag_breakdown.volatiliteit.score ?? '—'} / 5
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {task.risico.betaalgedrag_breakdown.volatiliteit.explanation}
+              </p>
+            </div>
+            <p className="text-[10px] text-slate-400 italic">
+              Wanbetaler-voorspelling nog niet beschikbaar (Fase 3). Aggregaat genormaliseerd over
+              beschikbare sub-scores.
+            </p>
+          </div>
+        )}
         <ScoreRow
           label="Huidige stand"
           score={task.risico.huidige_stand}
@@ -426,9 +488,25 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           {task.potentieel.werkelijke_dagen - task.potentieel.afgesproken_dagen}d
         </p>
         <p className="text-slate-600">{task.potentieel.reden}</p>
+        {task.potentieel.pattern && (
+          <div className="pt-2 border-t border-slate-100 mt-2">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-700">Patroon</span>
+                <ConfidencePill value={task.potentieel.pattern.confidence} />
+              </div>
+              <span className="text-slate-400 font-mono text-[10px]">
+                {task.potentieel.pattern.pattern_type}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {task.potentieel.pattern.explanation}
+            </p>
+          </div>
+        )}
         {showSources && (
           <SourceLine>
-            standaard_betaaldag (afgeleid uit factuur + betaling) vs debiteur.standaard_betaaltermijn
+            standaard_betaaldag pattern recognition (clustering op factuur+betaling), debiteur.standaard_betaaltermijn
           </SourceLine>
         )}
       </ComponentBlock>
@@ -458,24 +536,16 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         </h4>
         <ul className="text-xs space-y-1 leading-relaxed">
           <li>
-            <span className="font-medium">Risico → Betaalgedrag → AI-trend</span> · score, label,
-            confidence, explanation (verslechterend / stabiel / verbeterend)
+            <span className="font-medium">Risico → Betaalgedrag → AI-wanbetaler</span> · voorspelling
+            van dagen vertraging + confidence (Fase 3 — vereist serverless inference)
           </li>
           <li>
-            <span className="font-medium">Risico → Betaalgedrag → AI-volatiliteit</span> · score,
-            label, confidence, explanation (regelmatig / onregelmatig / piek-patroon)
+            <span className="font-medium">Rijke AI-uitleg per component</span> · LLM-generated tekst
+            i.p.v. templates (Fase 2 — vereist serverless API call)
           </li>
           <li>
-            <span className="font-medium">Risico → Betaalgedrag → AI-wanbetaler</span> · score,
-            voorspelde dagen, type, confidence, explanation
-          </li>
-          <li>
-            <span className="font-medium">Potentieel → Standaard betaaldag</span> · pattern_type
-            (wekelijks / maandelijks / interval), pattern_value, confidence_label, data_points_used
-          </li>
-          <li>
-            <span className="font-medium">Impact → Effect-classificatie</span> · confidence bij
-            effect_type
+            <span className="font-medium">Impact → Effect-classificatie</span> · contextuele
+            beoordeling i.p.v. regels op taak.type (kan met LLM, Fase 2)
           </li>
         </ul>
       </section>
@@ -531,7 +601,7 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_28rem] gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
             <nav className="flex border-b border-slate-200 bg-slate-50/50">
               {tabs.map((tab) => {

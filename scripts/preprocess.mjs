@@ -38,6 +38,187 @@ const round = (n, dec = 2) => {
 const formatEUR = (n) =>
   '€' + n.toLocaleString('nl-NL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
 
+// ----- statistische helpers (fase 1 AI-componenten) --------------------------
+
+// Abramowitz & Stegun-benadering van de fout-functie, voor normaal-CDF
+function erf(x) {
+  const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741
+  const a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911
+  const sign = x < 0 ? -1 : 1
+  x = Math.abs(x)
+  const t = 1 / (1 + p * x)
+  const y = 1 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-x * x)
+  return sign * y
+}
+const normalCdf = (z) => 0.5 * (1 + erf(z / Math.SQRT2))
+
+// Mann-Kendall trend-test (non-parametrisch). Detecteert of een monotone
+// trend bestaat. Geeft tau (-1..1, sterkte+richting) en p-value (significantie).
+// Voor onze use case: positief tau betekent stijgende DSO = verslechterend
+// betaalgedrag.
+function mannKendall(values) {
+  const n = values.length
+  if (n < 4) return { tau: 0, pValue: 1, n }
+  let S = 0
+  for (let i = 0; i < n - 1; i++) {
+    for (let j = i + 1; j < n; j++) {
+      S += Math.sign(values[j] - values[i])
+    }
+  }
+  const variance = (n * (n - 1) * (2 * n + 5)) / 18
+  const z = S === 0 ? 0 : (S - Math.sign(S)) / Math.sqrt(variance)
+  const pValue = 2 * (1 - normalCdf(Math.abs(z)))
+  const tau = S / ((n * (n - 1)) / 2)
+  return { tau, pValue, n }
+}
+
+// Coefficient of variation — eenvoudige maat voor relatieve spreiding.
+// Lage CV = regelmatig, hoge CV = grillig.
+function coefficientOfVariation(values) {
+  if (values.length < 2) return 0
+  const mean = values.reduce((a, b) => a + b, 0) / values.length
+  if (mean === 0) return 0
+  const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length
+  return Math.sqrt(variance) / Math.abs(mean)
+}
+
+// Standaard betaaldag pattern recognition. Bekijkt drie patroon-types:
+// - maandelijks/einde_maand (dag-van-de-maand clustering)
+// - wekelijks (dag-van-de-week mode)
+// - interval (vast aantal dagen tussen betalingen)
+// Geeft beste fit + confidence-label terug.
+function detectPattern(paymentDates) {
+  // Dedupliceer naar unieke betaaldata. Meerdere deelbetalingen op
+  // dezelfde dag tellen als één betaalmoment.
+  const sorted = [...new Set(paymentDates)].sort()
+  const n = sorted.length
+  if (n < 4) {
+    return {
+      pattern_type: 'geen',
+      pattern_value: null,
+      fit_pct: 0,
+      payments_observed: n,
+      confidence: 'geen',
+      explanation: `Te weinig unieke betaalmomenten (${n}) om een patroon te detecteren.`,
+    }
+  }
+
+  // 1) Dag-van-de-maand clustering — probeer elk centerpunt 1..31 met ±3-window
+  //    (modulo 30 om wrap-around bij einde maand mee te nemen).
+  const days = sorted.map((d) => new Date(d).getUTCDate())
+  let bestMonthlyDay = 1
+  let bestMonthlyFit = 0
+  for (let center = 1; center <= 31; center++) {
+    const fit =
+      days.filter(
+        (d) => Math.min(Math.abs(d - center), 30 - Math.abs(d - center)) <= 3,
+      ).length / n
+    if (fit > bestMonthlyFit) {
+      bestMonthlyFit = fit
+      bestMonthlyDay = center
+    }
+  }
+
+  // 2) Dag-van-de-week mode
+  const dowCounts = new Array(7).fill(0)
+  for (const d of sorted) dowCounts[new Date(d).getUTCDay()]++
+  let bestDow = 0
+  for (let i = 1; i < 7; i++) if (dowCounts[i] > dowCounts[bestDow]) bestDow = i
+  const weeklyFit = dowCounts[bestDow] / n
+
+  // 3) Interval-patroon — mediaan van gaps + ±2-window
+  const intervals = []
+  for (let i = 1; i < sorted.length; i++) intervals.push(daysBetween(sorted[i], sorted[i - 1]))
+  const sortedIntervals = [...intervals].sort((a, b) => a - b)
+  const medianInterval = sortedIntervals[Math.floor(sortedIntervals.length / 2)]
+  const intervalFit =
+    intervals.length > 0
+      ? intervals.filter((iv) => Math.abs(iv - medianInterval) <= 2).length / intervals.length
+      : 0
+
+  const isEndMonth = bestMonthlyDay >= 25 || bestMonthlyDay <= 5
+  const dowLabel = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag'][
+    bestDow
+  ]
+
+  const candidates = [
+    {
+      pattern_type: isEndMonth ? 'einde_maand' : 'maandelijks',
+      pattern_value: isEndMonth ? 'rond einde/begin van de maand' : `rond dag ${bestMonthlyDay}`,
+      fit_pct: bestMonthlyFit,
+    },
+    { pattern_type: 'wekelijks', pattern_value: dowLabel, fit_pct: weeklyFit },
+    { pattern_type: 'interval', pattern_value: `elke ~${medianInterval} dagen`, fit_pct: intervalFit },
+  ]
+  candidates.sort((a, b) => b.fit_pct - a.fit_pct)
+  const best = candidates[0]
+
+  let confidence
+  if (best.fit_pct >= 0.8 && n >= 6) confidence = 'hoog'
+  else if (best.fit_pct >= 0.5 && n >= 4) confidence = 'middel'
+  else confidence = 'geen'
+
+  if (confidence === 'geen') {
+    return {
+      pattern_type: 'geen',
+      pattern_value: null,
+      fit_pct: Math.round(best.fit_pct * 100),
+      payments_observed: n,
+      confidence,
+      explanation: `Geen consistent patroon (sterkste optie: ${best.pattern_type} ${Math.round(best.fit_pct * 100)}% over ${n} betalingen).`,
+    }
+  }
+
+  return {
+    pattern_type: best.pattern_type,
+    pattern_value: best.pattern_value,
+    fit_pct: Math.round(best.fit_pct * 100),
+    payments_observed: n,
+    confidence,
+    explanation: `${best.pattern_value} — ${Math.round(best.fit_pct * 100)}% van ${n} betalingen volgen dit patroon.`,
+  }
+}
+
+// Verzamelt alle betaaldata voor één debiteur uit z'n factuur-historie.
+function collectPaymentDates(facturenList) {
+  const dates = []
+  for (const f of facturenList) {
+    for (const p of f.payments || []) if (p.date) dates.push(p.date)
+  }
+  return dates
+}
+
+// Berekent intervallen tussen opeenvolgende unieke betaaldata (in dagen).
+// Dedupliceert eerst, want deelbetalingen op dezelfde dag zijn één betaalmoment.
+function paymentIntervals(facturenList) {
+  const dates = [...new Set(collectPaymentDates(facturenList))].sort()
+  const intervals = []
+  for (let i = 1; i < dates.length; i++) intervals.push(daysBetween(dates[i], dates[i - 1]))
+  return intervals
+}
+
+// Bouwt een maandelijkse DSO-tijdreeks: gemiddelde dagen-te-laat van de
+// facturen die in die maand zijn betaald.
+function monthlyDsoSeries(paidFacturen) {
+  const byMonth = new Map()
+  for (const f of paidFacturen) {
+    if (!f.Duedate || !f.payments?.length) continue
+    const lastPay = f.payments.reduce((max, p) => (p.date > max ? p.date : max), '')
+    if (!lastPay) continue
+    const daysLate = daysBetween(lastPay, f.Duedate)
+    const month = lastPay.slice(0, 7) // 'YYYY-MM'
+    if (!byMonth.has(month)) byMonth.set(month, [])
+    byMonth.get(month).push(daysLate)
+  }
+  const months = [...byMonth.keys()].sort()
+  return {
+    months,
+    values: months.map(
+      (m) => byMonth.get(m).reduce((a, b) => a + b, 0) / byMonth.get(m).length,
+    ),
+  }
+}
+
 // ----- inladen ---------------------------------------------------------------
 
 console.log('Inlezen bestanden...')
@@ -88,12 +269,95 @@ function debiteurScores(debNr) {
   }
   const avgDaysLate = dsoVals.length ? dsoVals.reduce((a, b) => a + b, 0) / dsoVals.length : 0
 
-  let betaalgedrag
-  if (avgDaysLate <= 0) betaalgedrag = 1
-  else if (avgDaysLate <= 10) betaalgedrag = 2
-  else if (avgDaysLate <= 30) betaalgedrag = 3
-  else if (avgDaysLate <= 60) betaalgedrag = 4
-  else betaalgedrag = 5
+  let dsoScore
+  if (avgDaysLate <= 0) dsoScore = 1
+  else if (avgDaysLate <= 10) dsoScore = 2
+  else if (avgDaysLate <= 30) dsoScore = 3
+  else if (avgDaysLate <= 60) dsoScore = 4
+  else dsoScore = 5
+
+  // ---- AI-sub-parameter: trend (Mann-Kendall over maandelijkse DSO) -------
+  const monthly = monthlyDsoSeries(paid)
+  const mk = mannKendall(monthly.values)
+  let trendConfidence = 'geen'
+  if (mk.n >= 9 && mk.pValue < 0.05) trendConfidence = 'hoog'
+  else if (mk.n >= 6 && mk.pValue < 0.15) trendConfidence = 'middel'
+
+  let trendScore = null,
+    trendLabel = 'onbekend',
+    trendExplanation = ''
+  if (trendConfidence === 'geen') {
+    trendExplanation =
+      mk.n < 6
+        ? `Te weinig maanden met betaalactiviteit (${mk.n}) voor trendanalyse.`
+        : `Geen significante trend gevonden (p=${round(mk.pValue, 2)} over ${mk.n} maanden).`
+    trendLabel = mk.n < 6 ? 'onbekend' : 'stabiel'
+  } else {
+    // Positief tau = stijgende DSO = verslechterend betaalgedrag
+    if (mk.tau >= 0.4) {
+      trendScore = 5
+      trendLabel = 'sterk verslechterend'
+    } else if (mk.tau >= 0.2) {
+      trendScore = 4
+      trendLabel = 'verslechterend'
+    } else if (mk.tau > -0.2) {
+      trendScore = 3
+      trendLabel = 'stabiel'
+    } else if (mk.tau > -0.4) {
+      trendScore = 2
+      trendLabel = 'verbeterend'
+    } else {
+      trendScore = 1
+      trendLabel = 'sterk verbeterend'
+    }
+    trendExplanation = `${trendLabel} (Kendall τ=${round(mk.tau, 2)}, p=${round(mk.pValue, 2)} over ${mk.n} maanden).`
+  }
+
+  // ---- AI-sub-parameter: volatiliteit (CV op betaalintervallen) -----------
+  const intervals = paymentIntervals(e.facturen)
+  const cv = coefficientOfVariation(intervals)
+  let volatiliteitConfidence
+  if (intervals.length >= 10) volatiliteitConfidence = 'hoog'
+  else if (intervals.length >= 5) volatiliteitConfidence = 'middel'
+  else volatiliteitConfidence = 'geen'
+
+  let volatiliteitScore = null,
+    volatiliteitLabel = 'onbekend',
+    volatiliteitExplanation = ''
+  if (volatiliteitConfidence === 'geen') {
+    volatiliteitExplanation = `Te weinig betaalintervallen (${intervals.length}) om volatiliteit te bepalen.`
+  } else {
+    if (cv < 0.3) {
+      volatiliteitScore = 1
+      volatiliteitLabel = 'zeer regelmatig'
+    } else if (cv < 0.6) {
+      volatiliteitScore = 2
+      volatiliteitLabel = 'regelmatig'
+    } else if (cv < 1.0) {
+      volatiliteitScore = 3
+      volatiliteitLabel = 'wisselend'
+    } else if (cv < 1.5) {
+      volatiliteitScore = 4
+      volatiliteitLabel = 'onregelmatig'
+    } else {
+      volatiliteitScore = 5
+      volatiliteitLabel = 'zeer grillig'
+    }
+    volatiliteitExplanation = `${volatiliteitLabel} (CV=${round(cv, 2)} over ${intervals.length} betaalintervallen).`
+  }
+
+  // ---- AI-sub-parameter: standaard betaaldag pattern ----------------------
+  const paymentDates = collectPaymentDates(e.facturen)
+  const pattern = detectPattern(paymentDates)
+
+  // ---- Aggregaat betaalgedrag --------------------------------------------
+  // Gemiddelde van beschikbare sub-scores: DSO altijd, trend + volatiliteit
+  // alleen wanneer confidence != 'geen'. Wanbetaler-voorspelling wordt
+  // overgeslagen (fase 3).
+  const subScores = [dsoScore]
+  if (trendScore !== null) subScores.push(trendScore)
+  if (volatiliteitScore !== null) subScores.push(volatiliteitScore)
+  const betaalgedrag = subScores.reduce((a, b) => a + b, 0) / subScores.length
 
   // Huidige stand — % vervallen van totaal open voor deze debiteur, plus oudste post
   const totalOpen = e.openFacturen.reduce((s, f) => s + num(f['Balance amount']), 0)
@@ -156,7 +420,7 @@ function debiteurScores(debNr) {
   const risicoScore = (betaalgedrag * 30 + huidigeStand * 25 + omzetconcentratie * 10) / 65
 
   return {
-    betaalgedrag,
+    betaalgedrag: round(betaalgedrag, 2),
     huidigeStand,
     omzetconcentratie,
     disputen: null,
@@ -173,6 +437,32 @@ function debiteurScores(debNr) {
     paidCount: paid.length,
     totalOpen,
     overdueSum,
+    // AI-sub-parameters (fase 1)
+    betaalgedrag_breakdown: {
+      dso: {
+        score: dsoScore,
+        avg_days_late: Math.round(avgDaysLate),
+        invoice_count: dsoVals.length,
+      },
+      trend: {
+        score: trendScore,
+        label: trendLabel,
+        confidence: trendConfidence,
+        tau: round(mk.tau, 2),
+        p_value: round(mk.pValue, 3),
+        months_observed: mk.n,
+        explanation: trendExplanation,
+      },
+      volatiliteit: {
+        score: volatiliteitScore,
+        label: volatiliteitLabel,
+        confidence: volatiliteitConfidence,
+        cv: round(cv, 2),
+        intervals_observed: intervals.length,
+        explanation: volatiliteitExplanation,
+      },
+    },
+    pattern,
   }
 }
 
@@ -337,6 +627,7 @@ for (const c of taskCandidates) {
       disputen: null,
       krediet: null,
       omzetconcentratie: scores.omzetconcentratie,
+      betaalgedrag_breakdown: scores.betaalgedrag_breakdown,
     },
     potentieel: {
       score: scores.potentieel,
@@ -346,6 +637,7 @@ for (const c of taskCandidates) {
         scores.dsoCount > 0
           ? `Werkelijke termijn ${scores.avgActual}d vs afgesproken ${scores.avgAgreed}d, gemiddeld over ${scores.dsoCount} volledig betaalde facturen.`
           : `Geen volledig betaalde facturen in historie; potentieel afgeleid uit beschikbare data.`,
+      pattern: scores.pattern,
     },
   })
 }

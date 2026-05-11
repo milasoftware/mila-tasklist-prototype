@@ -55,13 +55,47 @@ export type Task = {
     disputen: number | null
     krediet: number | null
     omzetconcentratie: number
+    betaalgedrag_breakdown?: BetaalgedragBreakdown
   }
   potentieel: {
     score: number
     werkelijke_dagen: number
     afgesproken_dagen: number
     reden: string
+    pattern?: PatternInfo
   }
+}
+
+export type Confidence = 'hoog' | 'middel' | 'geen'
+
+export type BetaalgedragBreakdown = {
+  dso: { score: number; avg_days_late: number; invoice_count: number }
+  trend: {
+    score: number | null
+    label: string
+    confidence: Confidence
+    tau: number
+    p_value: number
+    months_observed: number
+    explanation: string
+  }
+  volatiliteit: {
+    score: number | null
+    label: string
+    confidence: Confidence
+    cv: number
+    intervals_observed: number
+    explanation: string
+  }
+}
+
+export type PatternInfo = {
+  pattern_type: 'maandelijks' | 'einde_maand' | 'wekelijks' | 'interval' | 'geen'
+  pattern_value: string | null
+  fit_pct: number
+  payments_observed: number
+  confidence: Confidence
+  explanation: string
 }
 
 // Relationele entiteiten (nog niet gebruikt door UI — voor pad B)
