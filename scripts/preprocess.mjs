@@ -1,0 +1,369 @@
+// Preprocess Covebo-export → src/data.generated.json
+//
+// Leest twee geanonimiseerde JSON-bestanden, berekent deterministische
+// risicoscore + priority + standaard betaaldag-achtige metrics, en schrijft
+// twee dingen weg:
+//   1. tasks[]  — top-N geprioriteerde taken in de huidige Task-shape (pad A)
+//   2. debiteuren[] / facturen[] / betalingen[]  — relationele entiteiten
+//      voor de eventuele uitbreiding naar pad B
+//
+// Disputen + krediet zijn niet aanwezig in de ruwe data; die categorieën
+// worden uitgesloten van de risicoberekening en met `null` weggeschreven.
+
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const REPO = path.resolve(__dirname, '..')
+
+const DEB_FILE = path.join(REPO, 'src/deb_data/jaarhistorie_deb_geanonimiseerd.json')
+const POSTS_FILE = path.join(REPO, 'src/deb_data/jaarhistorie_posten_VNOM_geanonimiseerd.json')
+const OUT_FILE = path.join(REPO, 'src/data.generated.json')
+
+const SNAPSHOT = '2026-05-11' // laatste factuurdatum in de dataset
+const TOP_N = 50
+
+// ----- helpers ---------------------------------------------------------------
+
+const today = new Date(SNAPSHOT)
+const oneDay = 86400000
+
+const num = (s) => (s === undefined || s === null || s === '' ? 0 : parseFloat(String(s).replace(',', '.')))
+const daysBetween = (later, earlier) => Math.floor((new Date(later) - new Date(earlier)) / oneDay)
+const round = (n, dec = 2) => {
+  const f = Math.pow(10, dec)
+  return Math.round(n * f) / f
+}
+const formatEUR = (n) =>
+  '€' + n.toLocaleString('nl-NL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+
+// ----- inladen ---------------------------------------------------------------
+
+console.log('Inlezen bestanden...')
+const debData = JSON.parse(fs.readFileSync(DEB_FILE, 'utf8'))
+const postsData = JSON.parse(fs.readFileSync(POSTS_FILE, 'utf8'))
+
+const debByNr = new Map(debData.debtors.map((d) => [d.Debtornumber, d]))
+
+// Splits posts: alleen records met type 'Factuur' zijn echte facturen.
+// (Type 'Betaling' / 'Terugbetaling' zijn losse boekstukken; betalingen zelf
+//  zitten al genest in factuur.payments.)
+const allFacturen = postsData.invoices.filter((i) => i['Invoicetype/Documenttype'] === 'Factuur')
+
+// ----- aggregaties globaal ---------------------------------------------------
+
+const openFacturenAll = allFacturen.filter((f) => num(f['Balance amount']) > 0)
+const totalOpenAR = openFacturenAll.reduce((s, f) => s + num(f['Balance amount']), 0)
+const yearlyOmzetTotal = allFacturen.reduce((s, f) => s + Math.max(0, num(f['Invoice amount'])), 0)
+
+console.log(`  ${allFacturen.length} facturen, ${openFacturenAll.length} open`)
+console.log(`  Totale openstaande AR: ${formatEUR(totalOpenAR)}`)
+console.log(`  Jaar-omzet: ${formatEUR(yearlyOmzetTotal)}`)
+
+// ----- per debiteur ----------------------------------------------------------
+
+const byDeb = new Map()
+for (const f of allFacturen) {
+  const k = f.Debtornumber
+  if (!byDeb.has(k)) byDeb.set(k, { facturen: [], openFacturen: [] })
+  const e = byDeb.get(k)
+  e.facturen.push(f)
+  if (num(f['Balance amount']) > 0) e.openFacturen.push(f)
+}
+
+function debiteurScores(debNr) {
+  const e = byDeb.get(debNr)
+  if (!e) return null
+
+  // DSO — gemiddelde dagen-te-laat op volledig betaalde facturen
+  const paid = e.facturen.filter(
+    (f) => f.payments && f.payments.length > 0 && num(f['Balance amount']) === 0 && f.Duedate,
+  )
+  const dsoVals = []
+  for (const f of paid) {
+    const lastPay = f.payments.reduce((max, p) => (p.date > max ? p.date : max), '')
+    if (!lastPay) continue
+    dsoVals.push(daysBetween(lastPay, f.Duedate))
+  }
+  const avgDaysLate = dsoVals.length ? dsoVals.reduce((a, b) => a + b, 0) / dsoVals.length : 0
+
+  let betaalgedrag
+  if (avgDaysLate <= 0) betaalgedrag = 1
+  else if (avgDaysLate <= 10) betaalgedrag = 2
+  else if (avgDaysLate <= 30) betaalgedrag = 3
+  else if (avgDaysLate <= 60) betaalgedrag = 4
+  else betaalgedrag = 5
+
+  // Huidige stand — % vervallen van totaal open voor deze debiteur, plus oudste post
+  const totalOpen = e.openFacturen.reduce((s, f) => s + num(f['Balance amount']), 0)
+  const overdue = e.openFacturen.filter((f) => f.Duedate && new Date(f.Duedate) < today)
+  const overdueSum = overdue.reduce((s, f) => s + num(f['Balance amount']), 0)
+  const pctOverdue = totalOpen > 0 ? overdueSum / totalOpen : 0
+  let oldestDays = 0
+  for (const f of overdue) {
+    const d = daysBetween(today, f.Duedate)
+    if (d > oldestDays) oldestDays = d
+  }
+  let huidigeStand
+  if (pctOverdue < 0.05) huidigeStand = 1
+  else if (pctOverdue < 0.25) huidigeStand = 2
+  else if (pctOverdue < 0.5) huidigeStand = 3
+  else if (pctOverdue < 0.75) huidigeStand = 4
+  else huidigeStand = 5
+
+  // Omzetconcentratie — debiteur-aandeel in jaar-omzet
+  const debiteurOmzet = e.facturen.reduce((s, f) => s + Math.max(0, num(f['Invoice amount'])), 0)
+  const pctOmzet = yearlyOmzetTotal > 0 ? debiteurOmzet / yearlyOmzetTotal : 0
+  let omzetconcentratie
+  if (pctOmzet < 0.005) omzetconcentratie = 1
+  else if (pctOmzet < 0.02) omzetconcentratie = 2
+  else if (pctOmzet < 0.05) omzetconcentratie = 3
+  else if (pctOmzet < 0.15) omzetconcentratie = 4
+  else omzetconcentratie = 5
+
+  // Werkelijke vs afgesproken termijn
+  const agreedTerms = e.facturen
+    .filter((f) => f.Invoicedate && f.Duedate)
+    .map((f) => daysBetween(f.Duedate, f.Invoicedate))
+    .filter((d) => d >= 0 && d <= 365)
+  const avgAgreed = agreedTerms.length
+    ? Math.round(agreedTerms.reduce((a, b) => a + b, 0) / agreedTerms.length)
+    : 30
+  const actualTerms = paid
+    .filter((f) => f.Invoicedate)
+    .map((f) => {
+      const lastPay = f.payments.reduce((max, p) => (p.date > max ? p.date : max), '')
+      return daysBetween(lastPay, f.Invoicedate)
+    })
+    .filter((d) => d >= 0 && d <= 730)
+  const avgActual = actualTerms.length
+    ? Math.round(actualTerms.reduce((a, b) => a + b, 0) / actualTerms.length)
+    : avgAgreed
+  const termDiff = avgActual - avgAgreed
+  let potentieel
+  if (termDiff <= 0) potentieel = 0
+  else if (termDiff <= 10) potentieel = 1
+  else if (termDiff <= 30) potentieel = 2
+  else if (termDiff <= 60) potentieel = 3
+  else if (termDiff <= 90) potentieel = 4
+  else potentieel = 5
+
+  // Risico — gewogen gemiddelde over beschikbare categorieën.
+  // Originele wegingen: betaalgedrag 30, huidige_stand 25, disputen 10,
+  // krediet 25, omzetconcentratie 10. Disputen + krediet ontbreken: skip
+  // en normaliseer op basis van (30+25+10)=65.
+  const risicoScore = (betaalgedrag * 30 + huidigeStand * 25 + omzetconcentratie * 10) / 65
+
+  return {
+    betaalgedrag,
+    huidigeStand,
+    omzetconcentratie,
+    disputen: null,
+    krediet: null,
+    risicoScore: round(risicoScore, 2),
+    avgDaysLate: Math.round(avgDaysLate),
+    pctOverdue: round(pctOverdue * 100, 1),
+    oldestDays,
+    pctOmzet: round(pctOmzet * 100, 2),
+    avgAgreed,
+    avgActual,
+    potentieel,
+    dsoCount: dsoVals.length,
+    paidCount: paid.length,
+    totalOpen,
+    overdueSum,
+  }
+}
+
+// ----- taken genereren -------------------------------------------------------
+
+function classifyTask(daysOverdue) {
+  if (daysOverdue >= 60) return 'escalatie'
+  if (daysOverdue >= 14) return 'bel_actie'
+  return 'herinnering'
+}
+
+function impactBedragScore(amount) {
+  const pct = amount / totalOpenAR
+  if (pct >= 0.15) return 5
+  if (pct >= 0.05) return 4
+  if (pct >= 0.02) return 3
+  if (pct >= 0.005) return 2
+  return 1
+}
+
+function urgentieScore(daysOverdue) {
+  if (daysOverdue >= 60) return 5
+  if (daysOverdue >= 30) return 4
+  if (daysOverdue >= 14) return 3
+  if (daysOverdue >= 1) return 2
+  return 1
+}
+
+const TYPE_LABEL = {
+  bel_actie: 'Bellen',
+  herinnering: 'Herinnering',
+  escalatie: 'Escalatie',
+}
+
+const tasks = []
+for (const f of openFacturenAll) {
+  if (!f.Duedate) continue
+  const daysOverdue = daysBetween(today, f.Duedate)
+  if (daysOverdue <= 0) continue
+
+  const debNr = f.Debtornumber
+  const debInfo = debByNr.get(debNr)
+  const scores = debiteurScores(debNr)
+  if (!scores) continue
+
+  const taskType = classifyTask(daysOverdue)
+  const bedrag = num(f['Balance amount'])
+  const bedragScore = impactBedragScore(bedrag)
+  const effectScore = 2
+  const effectType = 'directe_cash'
+  const impactScore = bedragScore
+  const urgentie = urgentieScore(daysOverdue)
+
+  const priority =
+    impactScore * 0.4 + urgentie * 0.3 + scores.risicoScore * 0.2 + scores.potentieel * 0.1
+
+  const omschrijving =
+    taskType === 'escalatie'
+      ? `Escalatie — factuur ${daysOverdue}d vervallen, ${formatEUR(bedrag)}`
+      : taskType === 'bel_actie'
+        ? `Bellen — factuur ${daysOverdue}d vervallen, ${formatEUR(bedrag)}`
+        : `Herinnering — factuur ${daysOverdue}d vervallen, ${formatEUR(bedrag)}`
+
+  const aanleiding =
+    daysOverdue >= 60
+      ? 'Factuur >60d vervallen — escalatie vereist'
+      : daysOverdue >= 30
+        ? 'Vorige bel-/herinneringsmomenten zonder reactie'
+        : daysOverdue >= 14
+          ? 'Eerste actieve belmoment in 14d-cyclus'
+          : 'Standaard herinneringsmoment'
+
+  tasks.push({
+    id: `t_${f.Invoicenumber}`,
+    debiteur: debInfo?.Debtorname || debNr,
+    debiteurnummer: debNr,
+    type: taskType,
+    taakomschrijving: omschrijving,
+    aanleiding,
+    factuurnummer: f.Invoicenumber,
+    bedrag,
+    priority: round(priority, 2),
+    impact: {
+      score: impactScore,
+      bedrag_score: bedragScore,
+      effect_score: effectScore,
+      effect_type: effectType,
+      bedrag,
+      pct_van_ar: round((bedrag / totalOpenAR) * 100, 2),
+      explanation: `${formatEUR(bedrag)} (${round((bedrag / totalOpenAR) * 100, 2)}% van openstaande AR) — directe cash bij betaling. Bedrag-score ${bedragScore}, effect-score ${effectScore}.`,
+    },
+    urgentie: {
+      score: urgentie,
+      reden: `Factuur ${daysOverdue}d vervallen (vervaldatum ${f.Duedate}).`,
+    },
+    risico: {
+      score: scores.risicoScore,
+      betaalgedrag: scores.betaalgedrag,
+      huidige_stand: scores.huidigeStand,
+      disputen: null,
+      krediet: null,
+      omzetconcentratie: scores.omzetconcentratie,
+    },
+    potentieel: {
+      score: scores.potentieel,
+      werkelijke_dagen: scores.avgActual,
+      afgesproken_dagen: scores.avgAgreed,
+      reden:
+        scores.dsoCount > 0
+          ? `Werkelijke termijn ${scores.avgActual}d vs afgesproken ${scores.avgAgreed}d, gemiddeld over ${scores.dsoCount} volledig betaalde facturen.`
+          : `Geen volledig betaalde facturen in historie; potentieel afgeleid uit beschikbare data.`,
+    },
+  })
+}
+
+tasks.sort((a, b) => b.priority - a.priority)
+const topTasks = tasks.slice(0, TOP_N)
+console.log(`Taken gegenereerd: ${tasks.length}, top-${TOP_N} geselecteerd.`)
+
+// ----- relationele entiteiten (pad B prep) -----------------------------------
+
+const relevantDebNrs = new Set(topTasks.map((t) => t.debiteurnummer))
+
+const debiteuren = []
+for (const nr of relevantDebNrs) {
+  const d = debByNr.get(nr)
+  if (!d) continue
+  debiteuren.push({
+    id: nr,
+    naam: d.Debtorname,
+    plaats: d.City,
+    accountmanager: d.Accountmanager,
+    klanttype: d.CustomerType,
+  })
+}
+
+const facturenOut = []
+const betalingenOut = []
+for (const nr of relevantDebNrs) {
+  const e = byDeb.get(nr)
+  if (!e) continue
+  for (const f of e.facturen) {
+    const id = f.Invoicenumber
+    const bedrag = num(f['Invoice amount'])
+    const openstaand = num(f['Balance amount'])
+    facturenOut.push({
+      id,
+      debiteurnummer: nr,
+      factuurdatum: f.Invoicedate,
+      vervaldatum: f.Duedate,
+      bedrag,
+      openstaand,
+      status: openstaand === 0 ? 'betaald' : openstaand > 0 ? 'open' : 'credit_nota',
+    })
+    for (const p of f.payments || []) {
+      betalingenOut.push({
+        id: p.id,
+        factuurnummer: id,
+        debiteurnummer: nr,
+        datum: p.date,
+        bedrag: Math.abs(num(p.amount)),
+      })
+    }
+  }
+}
+
+// ----- output ----------------------------------------------------------------
+
+const out = {
+  meta: {
+    snapshot_datum: SNAPSHOT,
+    bron: 'Covebo geanonimiseerde export (jaarhistorie 2025-05-11 → 2026-05-11)',
+    administratie: postsData.administration?.code || 'ADMIN001',
+    total_open_ar: round(totalOpenAR, 2),
+    total_facturen: allFacturen.length,
+    total_open_facturen: openFacturenAll.length,
+    total_taken_gegenereerd: tasks.length,
+    top_n: TOP_N,
+    debiteuren_in_top_n: relevantDebNrs.size,
+    facturen_in_top_n_set: facturenOut.length,
+    betalingen_in_top_n_set: betalingenOut.length,
+    uitgesloten_categorieen: ['disputen', 'krediet'],
+    uitsluitings_reden: 'Geen brondata aanwezig in Covebo-export — risicoberekening genormaliseerd over resterende categorieën (betaalgedrag 30, huidige_stand 25, omzetconcentratie 10).',
+  },
+  tasks: topTasks,
+  debiteuren,
+  facturen: facturenOut,
+  betalingen: betalingenOut,
+}
+
+fs.writeFileSync(OUT_FILE, JSON.stringify(out, null, 2))
+const sizeKB = Math.round(fs.statSync(OUT_FILE).size / 1024)
+console.log(`\nGeschreven naar src/data.generated.json (${sizeKB} KB)`)
+console.log(`  Top-${TOP_N} taken, ${debiteuren.length} debiteuren, ${facturenOut.length} facturen, ${betalingenOut.length} betalingen`)
