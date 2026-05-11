@@ -62,3 +62,43 @@ Drie van de vijf zijn dus gevuld; samen goed voor 65% van de oorspronkelijk bedo
 4. **Met Covebo afstemmen** over disputen- en kredietverzekering-data. Komt dat uit een ander systeem, of accepteren we dat die categorieën permanent leeg blijven?
 
 Daarna is Mila op AI-vlak compleet voor wat er met deze data mogelijk is.
+
+---
+
+## Appendix — waarom deze twee methodes?
+
+Niet nodig om te lezen voor het grote plaatje. Bedoeld voor wie wil weten waarom de keuze viel op Mann-Kendall en de variatiecoëfficiënt in plaats van iets anders.
+
+### Mann-Kendall trend-test (voor "gaat het beter of slechter")
+
+Wat we willen weten: betaalt deze klant slechter dan vroeger? Per klant hebben we ~12 maandelijkse meetpunten — de gemiddelde betaalduur per maand.
+
+Waarom Mann-Kendall:
+
+- **Werkt met rommelige data.** Betaalduur over de tijd is geen strakke lijn — er zitten uitschieters in (één keer 200 dagen, andere keer netjes op tijd). Veel statistische tests gaan ervan uit dat data netjes rond een gemiddelde verdeeld is met een nette spreiding. Dat klopt hier niet. Mann-Kendall negeert de getallen zelf en kijkt alleen naar de *richting* tussen elk maand-paar: zit de tweede hoger of lager dan de eerste? Daardoor laat één extreem late betaling de test niet kantelen.
+- **Detecteert ook niet-lineaire verslechtering.** Een klant kan stapsgewijs erger worden, of langzaam, of in golfjes — als de algemene richting maar consistent omhoog is, pakt Mann-Kendall dat op. Een rechte lijn is niet nodig.
+- **Geschikt voor weinig datapunten.** 12 maandwaarden is een kleine reeks. Mann-Kendall is daar specifiek voor ontworpen; veel andere tests vragen meer.
+- **Geeft een p-waarde terug.** Daardoor kunnen we eerlijk zeggen "zeker", "redelijk zeker" of "te weinig data" — in plaats van blind een score af te leveren.
+
+Wat we anders hadden kunnen kiezen:
+- *Gewoon laatste maand versus eerste maand* — te ruw, gaat voorbij aan de hele middentijd en geeft geen zekerheidsmaat.
+- *Lineaire regressie* — gevoelig voor uitschieters, eist een nettere data-verdeling dan we hier hebben.
+
+### Variatiecoëfficiënt (voor "hoe voorspelbaar")
+
+Wat we willen weten: betaalt deze klant in een vast ritme, of grillig? De variatiecoëfficiënt is de spreiding gedeeld door het gemiddelde, berekend over de tijd tussen opeenvolgende betalingen.
+
+Waarom de variatiecoëfficiënt:
+
+- **Schaalvrij — vergelijkbaar tussen klanten met heel verschillende ritmes.** Vergelijk klant A die elke 7 dagen betaalt met spreiding ±2 dagen, en klant B die elke 60 dagen betaalt met spreiding ±15 dagen. In absolute zin spreidt B veel meer, maar *relatief* zijn beide ongeveer even constant. De variatiecoëfficiënt deelt de spreiding door het gemiddelde, dus beide krijgen ongeveer dezelfde uitkomst (~0,25). Een wekelijkse en een maandelijkse betaler kunnen zo allebei "regelmatig" of allebei "grillig" zijn.
+- **Eenvoudig uit te leggen.** "Hoeveel wijkt de wachttijd tussen betalingen gemiddeld af, relatief gezien?" — meer is het niet.
+- **Stabiele, breed gebruikte drempels.** Onder 0,3 ≈ bijna metronoom, rond 1 ≈ wisselend, boven 1,5 ≈ pieken-en-stiltes. Deze grenzen zijn niet door ons verzonnen; ze zijn algemeen geaccepteerd in domeinen die met variabiliteit werken (kwaliteitscontrole, voorraadbeheer, financiële statistiek).
+
+Wat we anders hadden kunnen kiezen:
+- *Alleen de standaardafwijking* — niet over klanten heen vergelijkbaar (een wekelijkse betaler scoort altijd lager dan een maandelijkse, ongeacht regelmaat).
+- *Verschil tussen langste en kortste interval* — gedomineerd door één uitschieter.
+
+### Eerlijke kanttekeningen
+
+- **Mann-Kendall heeft datapunten nodig.** Met 1 jaar Covebo-historie komen we voor veel klanten net niet aan de drempel voor "zeker" of zelfs "redelijk zeker" — vandaar dat in onze top-50 vaak "te weinig data" bij trend staat. Twee à drie jaar historie zou hier een groot verschil maken.
+- **De variatiecoëfficiënt onderscheidt geen vormen.** Een klant met veel snelle betalingen en één hele late krijgt mogelijk dezelfde uitkomst als een klant met gelijkmatig verspreide intervallen. Voor onze use case is dat acceptabel — beide willen we "wisselend" noemen — maar de variatiecoëfficiënt meet de *grootte* van de spreiding, niet de *vorm* ervan.
