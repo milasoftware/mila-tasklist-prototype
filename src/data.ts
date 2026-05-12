@@ -42,6 +42,8 @@ export type Task = {
     effect_type: EffectType
     bedrag?: number
     pct_van_ar?: number
+    bedrag_rank?: number
+    bedrag_total_tasks?: number
     explanation: string
   }
   urgentie: {
@@ -133,10 +135,11 @@ export type Meta = {
   total_facturen: number
   total_open_facturen: number
   total_taken_gegenereerd: number
-  top_n: number
-  debiteuren_in_top_n: number
-  facturen_in_top_n_set: number
-  betalingen_in_top_n_set: number
+  top_n: number | null
+  taken_in_set: number
+  debiteuren_in_set: number
+  facturen_in_set: number
+  betalingen_in_set: number
   uitgesloten_categorieen: string[]
   uitsluitings_reden: string
 }

@@ -22,7 +22,7 @@ const POSTS_FILE = path.join(REPO, 'src/deb_data/jaarhistorie_posten_VNOM_geanon
 const OUT_FILE = path.join(REPO, 'src/data.generated.json')
 
 const SNAPSHOT = '2026-05-11' // laatste factuurdatum in de dataset
-const TOP_N = 50
+const TOP_N = Infinity // alle gegenereerde taken meenemen
 
 // ----- helpers ---------------------------------------------------------------
 
@@ -535,6 +535,13 @@ const P80 = pctValue(0.8)
 console.log(
   `Bedrag-percentielen (p20/p40/p60/p80): ${formatEUR(P20)} / ${formatEUR(P40)} / ${formatEUR(P60)} / ${formatEUR(P80)}`,
 )
+
+// Rang per taak: 1 = hoogste bedrag, N = laagste. Wordt in UI getoond
+// zodat duidelijk is waar deze taak staat ten opzichte van alle andere.
+const totalTaskCount = taskCandidates.length
+const sortedByBedragDesc = [...taskCandidates].sort((a, b) => b.totaalBedrag - a.totaalBedrag)
+const rankByCandidate = new Map()
+sortedByBedragDesc.forEach((c, idx) => rankByCandidate.set(c, idx + 1))
 function impactBedragScore(amount) {
   if (amount >= P80) return 5
   if (amount >= P60) return 4
@@ -608,6 +615,8 @@ for (const c of taskCandidates) {
       effect_type: effectType,
       bedrag: c.totaalBedrag,
       pct_van_ar: round((c.totaalBedrag / totalOpenAR) * 100, 2),
+      bedrag_rank: rankByCandidate.get(c),
+      bedrag_total_tasks: totalTaskCount,
       explanation:
         c.kind === 'grouped' && factuurCount > 1
           ? `${formatEUR(c.totaalBedrag)} verspreid over ${factuurCount} facturen (${round((c.totaalBedrag / totalOpenAR) * 100, 2)}% van AR) — directe cash bij betaling. Bedrag-score ${bedragScore} (p80=${formatEUR(P80)}), effect-score ${effectScore}.`
@@ -644,7 +653,8 @@ for (const c of taskCandidates) {
 
 tasks.sort((a, b) => b.priority - a.priority)
 const topTasks = tasks.slice(0, TOP_N)
-console.log(`Taken gegenereerd: ${tasks.length}, top-${TOP_N} geselecteerd.`)
+const selectionLabel = TOP_N === Infinity ? 'alle' : `top-${TOP_N}`
+console.log(`Taken gegenereerd: ${tasks.length}, ${selectionLabel} geselecteerd (${topTasks.length}).`)
 
 // ----- relationele entiteiten (pad B prep) -----------------------------------
 
@@ -704,10 +714,11 @@ const out = {
     total_facturen: allFacturen.length,
     total_open_facturen: openFacturenAll.length,
     total_taken_gegenereerd: tasks.length,
-    top_n: TOP_N,
-    debiteuren_in_top_n: relevantDebNrs.size,
-    facturen_in_top_n_set: facturenOut.length,
-    betalingen_in_top_n_set: betalingenOut.length,
+    top_n: TOP_N === Infinity ? null : TOP_N,
+    taken_in_set: topTasks.length,
+    debiteuren_in_set: relevantDebNrs.size,
+    facturen_in_set: facturenOut.length,
+    betalingen_in_set: betalingenOut.length,
     uitgesloten_categorieen: ['disputen', 'krediet'],
     uitsluitings_reden: 'Geen brondata aanwezig in Covebo-export — risicoberekening genormaliseerd over resterende categorieën (betaalgedrag 30, huidige_stand 25, omzetconcentratie 10).',
   },
@@ -720,4 +731,4 @@ const out = {
 fs.writeFileSync(OUT_FILE, JSON.stringify(out, null, 2))
 const sizeKB = Math.round(fs.statSync(OUT_FILE).size / 1024)
 console.log(`\nGeschreven naar src/data.generated.json (${sizeKB} KB)`)
-console.log(`  Top-${TOP_N} taken, ${debiteuren.length} debiteuren, ${facturenOut.length} facturen, ${betalingenOut.length} betalingen`)
+console.log(`  ${topTasks.length} taken, ${debiteuren.length} debiteuren, ${facturenOut.length} facturen, ${betalingenOut.length} betalingen`)

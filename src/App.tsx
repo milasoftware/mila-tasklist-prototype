@@ -503,6 +503,12 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           <p>
             <span className="text-slate-500">Bedrag dat hiermee binnenkomt: </span>
             {fmtEUR(task.impact.bedrag)}
+            {task.impact.bedrag_rank !== undefined && task.impact.bedrag_total_tasks !== undefined && (
+              <span className="text-slate-500">
+                {' '}
+                — staat op rang {task.impact.bedrag_rank} van {task.impact.bedrag_total_tasks} taken
+              </span>
+            )}
             {showSources && task.impact.pct_van_ar !== undefined && (
               <span className="text-slate-400">
                 {' '}
@@ -814,7 +820,9 @@ function ListView({
         setShowSources={setShowSources}
         rightSlot={
           <p className="text-sm text-slate-500 tabular-nums">
-            top {sorted.length} van {meta.total_taken_gegenereerd} taken
+            {sorted.length === meta.total_taken_gegenereerd
+              ? `${sorted.length} taken`
+              : `top ${sorted.length} van ${meta.total_taken_gegenereerd} taken`}
           </p>
         }
       />
