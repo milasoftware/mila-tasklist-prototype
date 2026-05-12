@@ -2,11 +2,13 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   tasks,
   meta,
+  betalingen,
   getDebiteur,
   getFacturen,
   getFacturenVoorDebiteur,
   type Task,
   type Factuur,
+  type Confidence,
 } from './data'
 
 // ----- Routing (hash-based, geen library) -----------------------------------
@@ -147,6 +149,194 @@ function PercentilesBar({
             </div>
           )
         })}
+      </div>
+    </div>
+  )
+}
+
+// ----- visualisaties voor de Betaalgedrag-sub-rijen ------------------------
+
+// Thermometer voor "gemiddelde dagen te laat". Marker positioneert
+// op een 0–60d schaal; kleur volgt de score-tone.
+function DsoThermometer({ days, score }: { days: number; score: number }) {
+  const max = 60
+  const pct = Math.max(0, Math.min(100, (days / max) * 100))
+  const tone =
+    score >= 4
+      ? 'bg-red-500'
+      : score >= 3
+        ? 'bg-orange-500'
+        : score >= 2
+          ? 'bg-amber-400'
+          : 'bg-emerald-500'
+  return (
+    <div className="mt-1.5 max-w-xs">
+      <div className="relative h-1.5 bg-slate-100 rounded-full">
+        <div
+          className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-[1.5px] border-white shadow ${tone}`}
+          style={{ left: `${pct}%` }}
+        />
+      </div>
+      <div className="flex justify-between text-[9px] text-slate-400 mt-0.5">
+        <span>0d (op tijd)</span>
+        <span>60d+ (zeer laat)</span>
+      </div>
+    </div>
+  )
+}
+
+// Sparkline voor maandelijkse DSO-reeks. Kleur volgt richting + confidence:
+// rood = stijgend (verslechterend), groen = dalend (verbeterend),
+// grijs = geen confidence.
+function TrendSparkline({
+  series,
+  confidence,
+}: {
+  series: { month: string; dso: number }[]
+  confidence: Confidence
+}) {
+  if (series.length < 2) return null
+  const width = 220
+  const height = 36
+  const padX = 3
+  const padY = 4
+  const values = series.map((s) => s.dso)
+  const minV = Math.min(...values)
+  const maxV = Math.max(...values)
+  const range = maxV - minV || 1
+  const points = series.map((s, i) => {
+    const x = padX + (i / (series.length - 1)) * (width - padX * 2)
+    const y = height - padY - ((s.dso - minV) / range) * (height - padY * 2)
+    return { x, y }
+  })
+  const path = points
+    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
+    .join(' ')
+  const first = series[0].dso
+  const last = series[series.length - 1].dso
+  const isUp = last > first
+  const colorClass =
+    confidence === 'geen'
+      ? 'text-slate-400'
+      : isUp
+        ? 'text-red-500'
+        : 'text-emerald-500'
+  const arrow = confidence === 'geen' ? '·' : isUp ? '↗' : '↘'
+  return (
+    <div className="mt-1.5 max-w-xs">
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+        <path
+          d={path}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+          className={colorClass}
+        />
+        {points.map((p, i) => (
+          <circle
+            key={i}
+            cx={p.x}
+            cy={p.y}
+            r={1.5}
+            fill="currentColor"
+            className={colorClass}
+          />
+        ))}
+      </svg>
+      <p className="text-[10px] text-slate-400">
+        {series.length} maanden · van {first}d naar {last}d{' '}
+        <span className={colorClass}>{arrow}</span>
+      </p>
+    </div>
+  )
+}
+
+// Dot-strip voor "hoe voorspelbaar". Plot unieke betaaldata van de
+// afgelopen 12 maanden als verticale streepjes op een tijdlijn.
+// Gelijkmatige spreiding = regelmatig, clusters/gaten = grillig.
+function VolatilityDotStrip({ debiteurnummer }: { debiteurnummer: string }) {
+  const snapshotMs = new Date(meta.snapshot_datum).getTime()
+  const yearAgoMs = snapshotMs - 365 * 86400000
+  const uniqDates = [
+    ...new Set(
+      betalingen
+        .filter((b) => b.debiteurnummer === debiteurnummer)
+        .map((b) => b.datum),
+    ),
+  ]
+    .filter((d) => {
+      const ms = new Date(d).getTime()
+      return ms >= yearAgoMs && ms <= snapshotMs
+    })
+    .sort()
+
+  if (uniqDates.length < 2) return null
+
+  const range = snapshotMs - yearAgoMs
+  return (
+    <div className="mt-1.5 max-w-xs">
+      <div className="relative h-4 bg-slate-50 rounded ring-1 ring-slate-100">
+        {uniqDates.map((d, i) => {
+          const pct = ((new Date(d).getTime() - yearAgoMs) / range) * 100
+          return (
+            <span
+              key={`${d}-${i}`}
+              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-0.5 h-2.5 bg-slate-500 rounded-full"
+              style={{ left: `${pct}%` }}
+            />
+          )
+        })}
+      </div>
+      <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+        <span>12 mnd geleden</span>
+        <span>{uniqDates.length} unieke betaalmomenten</span>
+        <span>nu</span>
+      </div>
+    </div>
+  )
+}
+
+// Stacked bar voor "Hoe staan we er nu voor". Rood deel = vervallen,
+// groene rest = niet vervallen, plus oudste-post als label.
+function HuidigeStandBar({
+  pctVervallen,
+  oudsteDagen,
+}: {
+  pctVervallen: number
+  oudsteDagen: number
+}) {
+  const pct = Math.max(0, Math.min(100, pctVervallen))
+  return (
+    <div className="mt-1.5 max-w-xs">
+      <div className="relative h-2 bg-emerald-100 rounded-full overflow-hidden ring-1 ring-emerald-200">
+        <div className="absolute inset-y-0 left-0 bg-red-400" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="flex justify-between text-[10px] mt-0.5">
+        <span className="text-red-600">{Math.round(pct)}% vervallen</span>
+        <span className="text-emerald-600">{Math.round(100 - pct)}% niet vervallen</span>
+        {oudsteDagen > 0 && <span className="text-slate-400">oudste {oudsteDagen}d</span>}
+      </div>
+    </div>
+  )
+}
+
+// Schaalbalk voor "Hoe belangrijk is deze klant voor ons". Toont aandeel
+// in jaaromzet op een schaal van 0% → 15%+ (15% is de drempel voor
+// max-score). Voor de meeste klanten zal de balk grotendeels leeg zijn —
+// dat is feitelijk hoe klein hun aandeel werkelijk is.
+function OmzetconcentratieBar({ pctOmzet }: { pctOmzet: number }) {
+  const scaleMax = 15
+  const clipped = Math.min(scaleMax, Math.max(0, pctOmzet))
+  const pct = (clipped / scaleMax) * 100
+  return (
+    <div className="mt-1.5 max-w-xs">
+      <div className="relative h-2 bg-slate-100 rounded-full">
+        <div className="absolute inset-y-0 left-0 bg-slate-700 rounded-full" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+        <span>0% (klein)</span>
+        <span className="text-slate-700">{pctOmzet.toFixed(2)}% van jaaromzet</span>
+        <span>15%+ (groot)</span>
       </div>
     </div>
   )
@@ -685,6 +875,10 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
                 vervaldatum, op basis van {task.risico.betaalgedrag_breakdown.dso.invoice_count}{' '}
                 facturen.
               </p>
+              <DsoThermometer
+                days={task.risico.betaalgedrag_breakdown.dso.avg_days_late}
+                score={task.risico.betaalgedrag_breakdown.dso.score}
+              />
             </div>
             <div>
               <div className="flex items-center justify-between gap-2 text-xs">
@@ -699,6 +893,10 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
               <p className="text-[11px] text-slate-500 mt-0.5">
                 {trendPlain(task.risico.betaalgedrag_breakdown.trend, showSources)}
               </p>
+              <TrendSparkline
+                series={task.risico.betaalgedrag_breakdown.trend.series}
+                confidence={task.risico.betaalgedrag_breakdown.trend.confidence}
+              />
             </div>
             <div>
               <div className="flex items-center justify-between gap-2 text-xs">
@@ -715,6 +913,9 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
               <p className="text-[11px] text-slate-500 mt-0.5">
                 {volatiliteitPlain(task.risico.betaalgedrag_breakdown.volatiliteit, showSources)}
               </p>
+              {task.debiteurnummer && (
+                <VolatilityDotStrip debiteurnummer={task.debiteurnummer} />
+              )}
             </div>
             <p className="text-[10px] text-slate-400 italic">
               We kunnen nog niet voorspellen óf deze klant gaat wanbetalen — dat komt in een latere
@@ -728,6 +929,12 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           source="factuur.openstaand_bedrag, factuur.vervaldatum (% vervallen, oudste post)"
           showSource={showSources}
         />
+        {task.risico.huidige_stand_pct_vervallen !== undefined && (
+          <HuidigeStandBar
+            pctVervallen={task.risico.huidige_stand_pct_vervallen}
+            oudsteDagen={task.risico.huidige_stand_oudste_dagen ?? 0}
+          />
+        )}
         {task.risico.disputen !== null && (
           <ScoreRow
             label="Disputen"
@@ -759,6 +966,9 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           source="omzet_historie.omzet (aandeel debiteur in totale AR-scope)"
           showSource={showSources}
         />
+        {task.risico.omzetconcentratie_pct !== undefined && (
+          <OmzetconcentratieBar pctOmzet={task.risico.omzetconcentratie_pct} />
+        )}
       </ComponentBlock>
 
       <ComponentBlock
