@@ -570,29 +570,19 @@ function DebtorContext({ task, showSources }: { task: Task; showSources: boolean
 
 function ComponentBlock({
   title,
-  subtitle,
-  weight,
   score,
+  lead,
   children,
 }: {
   title: string
-  subtitle?: string
-  weight: number
   score: number
+  lead?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <section className="border border-slate-200 rounded-md p-4">
       <div className="flex items-baseline justify-between mb-3 gap-3">
-        <div>
-          <h4 className="font-medium text-slate-900">
-            {title}
-            <span className="ml-2 text-xs text-slate-500 font-normal">
-              telt voor {Math.round(weight * 100)}%
-            </span>
-          </h4>
-          {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
-        </div>
+        <h4 className="font-medium text-slate-900">{title}</h4>
         <div className="text-right shrink-0">
           <span className="text-2xl font-semibold tabular-nums text-slate-900">
             {fmtNL(score, score % 1 === 0 ? 0 : 1)}
@@ -600,6 +590,7 @@ function ComponentBlock({
           <span className="text-sm text-slate-500"> / 5</span>
         </div>
       </div>
+      {lead && <div className="mb-3 text-sm text-slate-700">{lead}</div>}
       <div className="mb-3"><Bar value={score} /></div>
       <div className="space-y-2 text-sm text-slate-700">{children}</div>
     </section>
@@ -630,28 +621,22 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
 
       <ComponentBlock
         title="Hoeveel levert dit op?"
-        subtitle="Hoe groot het bedrag is en wat de actie oplevert."
-        weight={WEIGHTS.impact}
         score={task.impact.score}
+        lead={
+          task.impact.bedrag !== undefined ? (
+            <p>
+              <span className="text-slate-500">Bedrag dat hiermee binnenkomt: </span>
+              {fmtEUR(task.impact.bedrag)}
+              {showSources && task.impact.pct_van_ar !== undefined && (
+                <span className="text-slate-400">
+                  {' '}
+                  ({fmtNL(task.impact.pct_van_ar, 1)}% van totaal openstaand)
+                </span>
+              )}
+            </p>
+          ) : undefined
+        }
       >
-        {task.impact.bedrag !== undefined && (
-          <p>
-            <span className="text-slate-500">Bedrag dat hiermee binnenkomt: </span>
-            {fmtEUR(task.impact.bedrag)}
-            {task.impact.bedrag_rank !== undefined && task.impact.bedrag_total_tasks !== undefined && (
-              <span className="text-slate-500">
-                {' '}
-                — staat op rang {task.impact.bedrag_rank} van {task.impact.bedrag_total_tasks} taken
-              </span>
-            )}
-            {showSources && task.impact.pct_van_ar !== undefined && (
-              <span className="text-slate-400">
-                {' '}
-                ({fmtNL(task.impact.pct_van_ar, 1)}% van totaal openstaand)
-              </span>
-            )}
-          </p>
-        )}
         {task.impact.bedrag !== undefined && (
           <PercentilesBar
             activeScore={task.impact.bedrag_score}
@@ -670,12 +655,7 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         )}
       </ComponentBlock>
 
-      <ComponentBlock
-        title="Hoe dringend is dit?"
-        subtitle="Hoeveel tijd er al voorbij is sinds de afspraak."
-        weight={WEIGHTS.urgentie}
-        score={task.urgentie.score}
-      >
+      <ComponentBlock title="Hoe dringend is dit?" score={task.urgentie.score}>
         <p className="text-slate-600">{task.urgentie.reden}</p>
         {showSources && (
           <SourceLine>
@@ -684,12 +664,7 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         )}
       </ComponentBlock>
 
-      <ComponentBlock
-        title="Hoe risicovol is deze klant?"
-        subtitle="Wat we uit de historie weten over hoe deze klant zich gedraagt."
-        weight={WEIGHTS.risico}
-        score={task.risico.score}
-      >
+      <ComponentBlock title="Hoe risicovol is deze klant?" score={task.risico.score}>
         <ScoreRow
           label="Hoe betaalt deze klant normaal"
           score={task.risico.betaalgedrag}
@@ -788,8 +763,6 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
 
       <ComponentBlock
         title="Hoeveel sneller kan deze klant betalen?"
-        subtitle="Het verschil tussen wat is afgesproken en wat we in de praktijk zien."
-        weight={WEIGHTS.potentieel}
         score={task.potentieel.score}
       >
         <p className="text-slate-600">
