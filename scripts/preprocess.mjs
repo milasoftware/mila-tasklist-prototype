@@ -452,6 +452,7 @@ function debiteurScores(debNr) {
         p_value: round(mk.pValue, 3),
         months_observed: mk.n,
         explanation: trendExplanation,
+        series: monthly.months.map((m, i) => ({ month: m, dso: Math.round(monthly.values[i]) })),
       },
       volatiliteit: {
         score: volatiliteitScore,
@@ -628,6 +629,7 @@ for (const c of taskCandidates) {
     },
     urgentie: {
       score: urgentie,
+      dagen_vervallen: c.oudste,
       reden:
         c.kind === 'grouped' && factuurCount > 1
           ? `Oudste factuur ${c.oudste}d vervallen — over ${factuurCount} posten.`
@@ -637,9 +639,12 @@ for (const c of taskCandidates) {
       score: scores.risicoScore,
       betaalgedrag: scores.betaalgedrag,
       huidige_stand: scores.huidigeStand,
+      huidige_stand_pct_vervallen: scores.pctOverdue,
+      huidige_stand_oudste_dagen: scores.oldestDays,
       disputen: null,
       krediet: null,
       omzetconcentratie: scores.omzetconcentratie,
+      omzetconcentratie_pct: scores.pctOmzet,
       betaalgedrag_breakdown: scores.betaalgedrag_breakdown,
     },
     potentieel: {

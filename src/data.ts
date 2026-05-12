@@ -48,15 +48,19 @@ export type Task = {
   }
   urgentie: {
     score: number
+    dagen_vervallen?: number
     reden: string
   }
   risico: {
     score: number
     betaalgedrag: number
     huidige_stand: number
+    huidige_stand_pct_vervallen?: number
+    huidige_stand_oudste_dagen?: number
     disputen: number | null
     krediet: number | null
     omzetconcentratie: number
+    omzetconcentratie_pct?: number
     betaalgedrag_breakdown?: BetaalgedragBreakdown
   }
   potentieel: {
@@ -80,6 +84,7 @@ export type BetaalgedragBreakdown = {
     p_value: number
     months_observed: number
     explanation: string
+    series: { month: string; dso: number }[]
   }
   volatiliteit: {
     score: number | null

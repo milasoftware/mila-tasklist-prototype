@@ -2,11 +2,13 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   tasks,
   meta,
+  betalingen,
   getDebiteur,
   getFacturen,
   getFacturenVoorDebiteur,
   type Task,
   type Factuur,
+  type Confidence,
 } from './data'
 
 // ----- Routing (hash-based, geen library) -----------------------------------
@@ -152,6 +154,394 @@ function PercentilesBar({
   )
 }
 
+// ----- visualisaties voor de Betaalgedrag-sub-rijen ------------------------
+
+// Thermometer voor "gemiddelde dagen te laat". Marker positioneert
+// op een 0–60d schaal; kleur volgt de score-tone.
+function DsoThermometer({ days, score }: { days: number; score: number }) {
+  const max = 60
+  const pct = Math.max(0, Math.min(100, (days / max) * 100))
+  const tone =
+    score >= 4
+      ? 'bg-red-500'
+      : score >= 3
+        ? 'bg-orange-500'
+        : score >= 2
+          ? 'bg-amber-400'
+          : 'bg-emerald-500'
+  return (
+    <div className="mt-1.5">
+      <div className="relative h-1.5 bg-slate-100 rounded-full">
+        <div
+          className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-[1.5px] border-white shadow ${tone}`}
+          style={{ left: `${pct}%` }}
+        />
+      </div>
+      <div className="flex justify-between text-[9px] text-slate-400 mt-0.5">
+        <span>0d (op tijd)</span>
+        <span>60d+ (zeer laat)</span>
+      </div>
+    </div>
+  )
+}
+
+// Sparkline voor maandelijkse DSO-reeks. Kleur volgt richting + confidence:
+// rood = stijgend (verslechterend), groen = dalend (verbeterend),
+// grijs = geen confidence.
+function TrendSparkline({
+  series,
+  confidence,
+}: {
+  series: { month: string; dso: number }[]
+  confidence: Confidence
+}) {
+  if (series.length < 2) return null
+  const width = 220
+  const height = 36
+  const padX = 3
+  const padY = 4
+  const values = series.map((s) => s.dso)
+  const minV = Math.min(...values)
+  const maxV = Math.max(...values)
+  const range = maxV - minV || 1
+  const points = series.map((s, i) => {
+    const x = padX + (i / (series.length - 1)) * (width - padX * 2)
+    const y = height - padY - ((s.dso - minV) / range) * (height - padY * 2)
+    return { x, y }
+  })
+  const path = points
+    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
+    .join(' ')
+  const first = series[0].dso
+  const last = series[series.length - 1].dso
+  const isUp = last > first
+  const colorClass =
+    confidence === 'geen'
+      ? 'text-slate-400'
+      : isUp
+        ? 'text-red-500'
+        : 'text-emerald-500'
+  const arrow = confidence === 'geen' ? '·' : isUp ? '↗' : '↘'
+  return (
+    <div className="mt-1.5">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        className={`w-full ${colorClass}`}
+        style={{ height: `${height}px` }}
+      >
+        <path
+          d={path}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+        />
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r={1.5} fill="currentColor" />
+        ))}
+      </svg>
+      <p className="text-[10px] text-slate-400">
+        {series.length} maanden · van {first}d naar {last}d{' '}
+        <span className={colorClass}>{arrow}</span>
+      </p>
+    </div>
+  )
+}
+
+// Dot-strip voor "hoe voorspelbaar". Plot unieke betaaldata van de
+// afgelopen 12 maanden als verticale streepjes op een tijdlijn.
+// Gelijkmatige spreiding = regelmatig, clusters/gaten = grillig.
+function VolatilityDotStrip({ debiteurnummer }: { debiteurnummer: string }) {
+  const snapshotMs = new Date(meta.snapshot_datum).getTime()
+  const yearAgoMs = snapshotMs - 365 * 86400000
+  const uniqDates = [
+    ...new Set(
+      betalingen
+        .filter((b) => b.debiteurnummer === debiteurnummer)
+        .map((b) => b.datum),
+    ),
+  ]
+    .filter((d) => {
+      const ms = new Date(d).getTime()
+      return ms >= yearAgoMs && ms <= snapshotMs
+    })
+    .sort()
+
+  if (uniqDates.length < 2) return null
+
+  const range = snapshotMs - yearAgoMs
+  return (
+    <div className="mt-1.5">
+      <div className="relative h-4 bg-slate-50 rounded ring-1 ring-slate-100">
+        {uniqDates.map((d, i) => {
+          const pct = ((new Date(d).getTime() - yearAgoMs) / range) * 100
+          return (
+            <span
+              key={`${d}-${i}`}
+              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-0.5 h-2.5 bg-slate-500 rounded-full"
+              style={{ left: `${pct}%` }}
+            />
+          )
+        })}
+      </div>
+      <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+        <span>12 mnd geleden</span>
+        <span>{uniqDates.length} unieke betaalmomenten</span>
+        <span>nu</span>
+      </div>
+    </div>
+  )
+}
+
+// Urgentie-thermometer: marker op de schaal 0d (vandaag) → 60d+ (escalatie).
+// Kleur volgt de urgentie-score-zones, in lijn met de drempels uit preprocess.
+function UrgentieThermometer({ days, score }: { days: number; score: number }) {
+  const max = 60
+  const pct = Math.max(0, Math.min(100, (days / max) * 100))
+  const tone =
+    score >= 5
+      ? 'bg-red-500'
+      : score >= 4
+        ? 'bg-orange-500'
+        : score >= 3
+          ? 'bg-amber-400'
+          : score >= 2
+            ? 'bg-amber-300'
+            : 'bg-slate-300'
+  return (
+    <div className="mt-1.5">
+      <div className="relative h-1.5 bg-slate-100 rounded-full">
+        {/* Drempel-tickjes voor de 4 grenzen (14d, 30d, 60d). 0d en 60+ zijn de uiteindes. */}
+        {[14, 30].map((d) => (
+          <span
+            key={d}
+            className="absolute top-1/2 -translate-y-1/2 w-px h-2 bg-slate-300"
+            style={{ left: `${(d / max) * 100}%` }}
+          />
+        ))}
+        <div
+          className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-[1.5px] border-white shadow ${tone}`}
+          style={{ left: `${pct}%` }}
+        />
+      </div>
+      <div className="flex justify-between text-[9px] text-slate-400 mt-0.5">
+        <span>0d (vandaag)</span>
+        <span>60d+ (escalatie)</span>
+      </div>
+    </div>
+  )
+}
+
+// Vergelijking van afgesproken vs. werkelijke betaaltermijn op één
+// tijdlijn-balk. Groen stipje = afgesproken moment, oranje streepje =
+// werkelijk moment. Het stuk tussen beide markers is oranje gearceerd
+// zodat de overschrijding meteen opvalt.
+function PotentieelComparison({
+  afgesproken,
+  werkelijk,
+}: {
+  afgesproken: number
+  werkelijk: number
+}) {
+  // Schaalwaarde: ruim genoeg om beide markers comfortabel te tonen
+  const max = Math.max(werkelijk, afgesproken * 1.5, 30)
+  const pctA = (afgesproken / max) * 100
+  const pctW = (werkelijk / max) * 100
+  const diff = werkelijk - afgesproken
+  const teLaat = diff > 0
+
+  return (
+    <div className="mt-2">
+      <div className="relative h-4">
+        {/* Track */}
+        <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1.5 bg-slate-100 rounded-full" />
+
+        {/* Gearceerd segment tussen afgesproken en werkelijk (alleen als te laat) */}
+        {teLaat && (
+          <div
+            className="absolute top-1/2 -translate-y-1/2 h-1.5 bg-orange-200"
+            style={{ left: `${pctA}%`, width: `${pctW - pctA}%` }}
+          />
+        )}
+
+        {/* Afgesproken: groen stipje */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-emerald-500 border-2 border-white shadow-sm"
+          style={{ left: `${pctA}%` }}
+          title={`Afgesproken: ${afgesproken} dagen`}
+        />
+
+        {/* Werkelijk: oranje verticale streep */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-1 h-4 bg-orange-500 rounded-sm"
+          style={{ left: `${pctW}%` }}
+          title={`Werkelijk: ${werkelijk} dagen`}
+        />
+      </div>
+
+      {/* Legenda met waardes */}
+      <div className="flex items-center gap-4 mt-2 text-[10px] text-slate-500">
+        <span className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+          Afgesproken{' '}
+          <span className="tabular-nums text-slate-700 font-medium">{afgesproken}d</span>
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-0.5 h-2.5 bg-orange-500 inline-block" />
+          Werkelijk{' '}
+          <span className="tabular-nums text-slate-700 font-medium">{werkelijk}d</span>
+        </span>
+        {teLaat && <span className="text-orange-600 ml-auto">+{diff}d langer</span>}
+      </div>
+    </div>
+  )
+}
+
+// Stacked bar voor "Hoe staan we er nu voor". Rood deel = vervallen,
+// groene rest = niet vervallen, plus oudste-post als label.
+function HuidigeStandBar({
+  pctVervallen,
+  oudsteDagen,
+}: {
+  pctVervallen: number
+  oudsteDagen: number
+}) {
+  const pct = Math.max(0, Math.min(100, pctVervallen))
+  return (
+    <div className="mt-1.5">
+      <div className="relative h-2 bg-emerald-100 rounded-full overflow-hidden ring-1 ring-emerald-200">
+        <div className="absolute inset-y-0 left-0 bg-red-400" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="flex justify-between text-[10px] mt-0.5">
+        <span className="text-red-600">{Math.round(pct)}% vervallen</span>
+        <span className="text-emerald-600">{Math.round(100 - pct)}% niet vervallen</span>
+        {oudsteDagen > 0 && <span className="text-slate-400">oudste {oudsteDagen}d</span>}
+      </div>
+    </div>
+  )
+}
+
+// Schaalbalk voor "Hoe belangrijk is deze klant voor ons". Toont aandeel
+// in jaaromzet op een schaal van 0% → 15%+ (15% is de drempel voor
+// max-score). Voor de meeste klanten zal de balk grotendeels leeg zijn —
+// dat is feitelijk hoe klein hun aandeel werkelijk is.
+function OmzetconcentratieBar({ pctOmzet }: { pctOmzet: number }) {
+  const scaleMax = 15
+  const clipped = Math.min(scaleMax, Math.max(0, pctOmzet))
+  const pct = (clipped / scaleMax) * 100
+  return (
+    <div className="mt-1.5">
+      <div className="relative h-2 bg-slate-100 rounded-full">
+        <div className="absolute inset-y-0 left-0 bg-slate-700 rounded-full" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+        <span>0% (klein)</span>
+        <span className="text-slate-700">{pctOmzet.toFixed(2)}% van jaaromzet</span>
+        <span>15%+ (groot)</span>
+      </div>
+    </div>
+  )
+}
+
+// Compacte cirkel-indicator voor een score van 0-max. Kleinere broer
+// van PriorityRing — geen tooltip, geen "van 5" bijschrift, schaalbaar
+// via de size prop.
+function ScoreRing({
+  score,
+  size = 48,
+  max = 5,
+}: {
+  score: number | null
+  size?: number
+  max?: number
+}) {
+  const stroke = Math.max(4, Math.round(size / 10))
+  const radius = (size - stroke) / 2
+  const circumference = 2 * Math.PI * radius
+  const fraction = score == null ? 0 : Math.max(0, Math.min(1, score / max))
+  const offset = circumference * (1 - fraction)
+
+  // Kleur volgt het priorityTone-schema voor visuele consistentie.
+  const strokeColorClass =
+    score == null
+      ? 'text-slate-200'
+      : score >= 4
+        ? 'text-red-500'
+        : score >= 3
+          ? 'text-orange-500'
+          : score >= 2
+            ? 'text-amber-400'
+            : 'text-slate-400'
+
+  const fontSizeClass = size >= 56 ? 'text-lg' : size >= 44 ? 'text-sm' : 'text-xs'
+
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke="rgb(241 245 249)"
+          strokeWidth={stroke}
+        />
+        {score != null && (
+          <circle
+            className={strokeColorClass}
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={stroke}
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            strokeLinecap="round"
+            transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          />
+        )}
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className={`${fontSizeClass} font-semibold text-slate-900 tabular-nums leading-none`}>
+          {score == null ? '—' : fmtNL(score, score % 1 === 0 ? 0 : 1)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+// Uniforme kaart voor één metric in de risico-sectie. Titel + score
+// linkboven, optionele confidence-pill ernaast, caption eronder, viz
+// onderaan. Vult de breedte van zijn grid-cel.
+function MetricCard({
+  title,
+  score,
+  confidence,
+  caption,
+  viz,
+}: {
+  title: string
+  score: number | null
+  confidence?: Confidence
+  caption?: React.ReactNode
+  viz?: React.ReactNode
+}) {
+  return (
+    <div className="border border-slate-200 rounded-md p-4 flex flex-col">
+      <div className="flex items-start justify-between gap-3 mb-1">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <span className="text-sm font-medium text-slate-800 leading-snug">{title}</span>
+          {confidence && <ConfidencePill value={confidence} />}
+        </div>
+        <ScoreRing score={score} size={40} />
+      </div>
+      {caption && <p className="text-xs text-slate-500 leading-snug mb-2">{caption}</p>}
+      {viz && <div className="mt-auto">{viz}</div>}
+    </div>
+  )
+}
+
 function ConfidencePill({ value }: { value: 'hoog' | 'middel' | 'geen' }) {
   const tone =
     value === 'hoog'
@@ -244,9 +634,10 @@ function PriorityRing({ task }: { task: Task }) {
         Priority
       </p>
 
-      {/* Hover tooltip met opbouw van de score */}
+      {/* Hover tooltip met opbouw van de score (rechts-uitgelijnd zodat
+          hij niet overflowt op een full-width container) */}
       <div
-        className="absolute left-1/2 -translate-x-1/2 top-full mt-3 hidden group-hover:block z-20 bg-slate-900 text-white rounded-md p-3 text-xs shadow-xl pointer-events-none"
+        className="absolute right-0 top-full mt-3 hidden group-hover:block z-20 bg-slate-900 text-white rounded-md p-3 text-xs shadow-xl pointer-events-none"
         style={{ width: 320 }}
       >
         <p className="font-medium mb-2 text-white/90">Opbouw van de priority</p>
@@ -479,7 +870,9 @@ function FactuurTable({
   )
 }
 
-function DebtorContext({ task, showSources }: { task: Task; showSources: boolean }) {
+// Centrale lookup van alles wat we voor een taak/debiteur nodig hebben.
+// Wordt door meerdere sub-componenten gebruikt — één keer berekend per render.
+function getDebtorData(task: Task) {
   if (!task.debiteurnummer) return null
   const deb = getDebiteur(task.debiteurnummer)
   const all = getFacturenVoorDebiteur(task.debiteurnummer)
@@ -499,71 +892,100 @@ function DebtorContext({ task, showSources }: { task: Task; showSources: boolean
       ? getFacturen([task.factuurnummer])
       : []
   const taakIds = new Set(taakFacturen.map((f) => f.id))
+  return { deb, all, open, openSum, overdueOpen, oudste, taakFacturen, taakIds }
+}
+
+// Compacte horizontale stats-bar — verving de gecombineerde DebtorContext.
+// Toont kerngegevens zonder de factuur-tabellen.
+function DebtorStatsBar({ task, showSources }: { task: Task; showSources: boolean }) {
+  const data = getDebtorData(task)
+  if (!data) return null
+  const { deb, all, open, openSum, overdueOpen, oudste } = data
+  const dso = task.risico.betaalgedrag_breakdown?.dso
+
+  const stats: { label: string; value: React.ReactNode }[] = []
+  if (deb?.accountmanager) {
+    stats.push({ label: 'Accountmanager', value: deb.accountmanager })
+  }
+  stats.push({
+    label: 'Open posten',
+    value: (
+      <span className="tabular-nums">
+        {open.length} · {fmtEUR(openSum)}
+      </span>
+    ),
+  })
+  stats.push({
+    label: 'Waarvan vervallen',
+    value: (
+      <span className="tabular-nums">
+        {overdueOpen.length}
+        {oudste > 0 ? <> · oudste {oudste}d</> : null}
+      </span>
+    ),
+  })
+  stats.push({
+    label: 'Historie',
+    value: (
+      <span className="tabular-nums">
+        {all.length} facturen, {all.filter((f) => f.status === 'betaald').length} betaald
+      </span>
+    ),
+  })
+  if (dso && dso.invoice_count > 0) {
+    stats.push({
+      label: 'DSO na vervaldatum',
+      value: (
+        <span className="tabular-nums">
+          {dso.avg_days_late}d gemiddeld
+          <span className="text-slate-400"> · over {dso.invoice_count} facturen</span>
+        </span>
+      ),
+    })
+  }
 
   return (
     <section className="border border-slate-200 rounded-md p-4">
-      <div className="mb-3">
-        <h4 className="font-medium text-slate-900">Debiteur-context</h4>
-      </div>
-
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mb-4">
-        {deb?.accountmanager && (
-          <>
-            <dt className="text-slate-500">Accountmanager</dt>
-            <dd className="text-slate-700">{deb.accountmanager}</dd>
-          </>
-        )}
-        <dt className="text-slate-500">Open posten</dt>
-        <dd className="text-slate-700 tabular-nums">
-          {open.length} · totaal {fmtEUR(openSum)}
-        </dd>
-        <dt className="text-slate-500">Waarvan vervallen</dt>
-        <dd className="text-slate-700 tabular-nums">
-          {overdueOpen.length}
-          {oudste > 0 ? <> · oudste {oudste}d</> : null}
-        </dd>
-        <dt className="text-slate-500">Historie</dt>
-        <dd className="text-slate-700 tabular-nums">
-          {all.length} facturen, {all.filter((f) => f.status === 'betaald').length} betaald
-        </dd>
-        {task.risico.betaalgedrag_breakdown &&
-          task.risico.betaalgedrag_breakdown.dso.invoice_count > 0 && (
-            <>
-              <dt className="text-slate-500">DSO na vervaldatum</dt>
-              <dd className="text-slate-700 tabular-nums">
-                {task.risico.betaalgedrag_breakdown.dso.avg_days_late}d gemiddeld
-                <span className="text-slate-400">
-                  {' '}
-                  · over {task.risico.betaalgedrag_breakdown.dso.invoice_count} betaalde facturen
-                </span>
-              </dd>
-            </>
-          )}
+      <h4 className="font-medium text-slate-900 mb-3">Debiteur-context</h4>
+      <dl className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        {stats.map((s) => (
+          <div key={s.label}>
+            <dt className="text-xs text-slate-500 uppercase tracking-wide">{s.label}</dt>
+            <dd className="text-sm text-slate-800 mt-0.5">{s.value}</dd>
+          </div>
+        ))}
       </dl>
-
-      {taakFacturen.length > 0 && (
-        <>
-          <p className="text-xs uppercase tracking-wide text-slate-500 mb-1.5">
-            Onderliggende facturen voor deze taak ({taakFacturen.length})
-          </p>
-          <FactuurTable facturen={taakFacturen} highlightIds={taakIds} />
-        </>
-      )}
-
-      {open.length > taakFacturen.length && (
-        <>
-          <p className="text-xs uppercase tracking-wide text-slate-500 mt-4 mb-1.5">
-            Alle open posten ({open.length})
-          </p>
-          <FactuurTable facturen={open} highlightIds={taakIds} />
-        </>
-      )}
-
       {showSources && (
         <SourceLine>
-          debiteur.* (NAW + accountmanager), factuur (alle posten), betaling (gekoppeld via factuurnummer)
+          debiteur.* (NAW + accountmanager), factuur (alle posten), betaling (gekoppeld via
+          factuurnummer)
         </SourceLine>
       )}
+    </section>
+  )
+}
+
+// Eén factuur-tabel als losstaande card, voor side-by-side gebruik.
+function FactuurCard({
+  title,
+  subtitle,
+  facturen,
+  highlightIds,
+}: {
+  title: string
+  subtitle?: React.ReactNode
+  facturen: Factuur[]
+  highlightIds?: Set<string>
+}) {
+  return (
+    <section className="border border-slate-200 rounded-md p-4">
+      <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+        {title} ({facturen.length})
+      </p>
+      {subtitle && (
+        <p className="text-xs text-slate-500 mb-3 leading-relaxed">{subtitle}</p>
+      )}
+      <FactuurTable facturen={facturen} highlightIds={highlightIds} />
     </section>
   )
 }
@@ -581,17 +1003,11 @@ function ComponentBlock({
 }) {
   return (
     <section className="border border-slate-200 rounded-md p-4">
-      <div className="flex items-baseline justify-between mb-3 gap-3">
+      <div className="flex items-start justify-between mb-3 gap-3">
         <h4 className="font-medium text-slate-900">{title}</h4>
-        <div className="text-right shrink-0">
-          <span className="text-2xl font-semibold tabular-nums text-slate-900">
-            {fmtNL(score, score % 1 === 0 ? 0 : 1)}
-          </span>
-          <span className="text-sm text-slate-500"> / 5</span>
-        </div>
+        <ScoreRing score={score} size={56} />
       </div>
       {lead && <div className="mb-3 text-sm text-slate-700">{lead}</div>}
-      <div className="mb-3"><Bar value={score} /></div>
       <div className="space-y-2 text-sm text-slate-700">{children}</div>
     </section>
   )
@@ -606,9 +1022,16 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
   }
   const total = calc.impact + calc.urgentie + calc.risico + calc.potentieel
 
+  const data = getDebtorData(task)
+  const taakFacturen = data?.taakFacturen ?? []
+  const taakIds = data?.taakIds
+  const allOpen = data?.open ?? []
+  const showAlleOpenPosten = allOpen.length > taakFacturen.length
+
   return (
     <div className="p-6 space-y-5">
-      <div className="flex items-start gap-6">
+      {/* Top header — debiteurnaam + ring */}
+      <div className="flex items-start gap-6 bg-white border border-slate-200 rounded-md p-5">
         <header className="flex-1 min-w-0">
           <h2 className="text-xl font-semibold text-slate-900">{task.debiteur}</h2>
           <p className="text-slate-700 mt-1">{task.taakomschrijving}</p>
@@ -617,244 +1040,293 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         <PriorityRing task={task} />
       </div>
 
-      <DebtorContext task={task} showSources={showSources} />
+      {/* Compacte stats-bar */}
+      <DebtorStatsBar task={task} showSources={showSources} />
 
-      <ComponentBlock
-        title="Hoeveel levert dit op?"
-        score={task.impact.score}
-        lead={
-          task.impact.bedrag !== undefined ? (
-            <p>
-              <span className="text-slate-500">Bedrag dat hiermee binnenkomt: </span>
-              {fmtEUR(task.impact.bedrag)}
-              {showSources && task.impact.pct_van_ar !== undefined && (
-                <span className="text-slate-400">
-                  {' '}
-                  ({fmtNL(task.impact.pct_van_ar, 1)}% van totaal openstaand)
-                </span>
-              )}
-            </p>
-          ) : undefined
-        }
-      >
-        {task.impact.bedrag !== undefined && (
-          <PercentilesBar
-            activeScore={task.impact.bedrag_score}
-            taakBedrag={task.impact.bedrag}
-            buckets={meta.bedrag_buckets}
-          />
-        )}
-        {showSources && (
-          <>
-            <ScoreRow label="Score voor bedrag" score={task.impact.bedrag_score} />
-            <p className="text-slate-500 text-xs pt-1">{task.impact.explanation}</p>
+      {/* Score-grid: 3 kolommen voor Impact, Urgentie, Potentieel */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <ComponentBlock
+          title="Hoeveel levert dit op?"
+          score={task.impact.score}
+          lead={
+            task.impact.bedrag !== undefined ? (
+              <p>
+                <span className="text-slate-500">Bedrag dat hiermee binnenkomt: </span>
+                {fmtEUR(task.impact.bedrag)}
+                {showSources && task.impact.pct_van_ar !== undefined && (
+                  <span className="text-slate-400">
+                    {' '}
+                    ({fmtNL(task.impact.pct_van_ar, 1)}% van totaal openstaand)
+                  </span>
+                )}
+              </p>
+            ) : undefined
+          }
+        >
+          {task.impact.bedrag !== undefined && (
+            <PercentilesBar
+              activeScore={task.impact.bedrag_score}
+              taakBedrag={task.impact.bedrag}
+              buckets={meta.bedrag_buckets}
+            />
+          )}
+          {showSources && (
+            <>
+              <ScoreRow label="Score voor bedrag" score={task.impact.bedrag_score} />
+              <p className="text-slate-500 text-xs pt-1">{task.impact.explanation}</p>
+              <SourceLine>
+                factuur.openstaand_bedrag (deze taak), SUM(factuur.openstaand_bedrag) over open AR
+              </SourceLine>
+            </>
+          )}
+        </ComponentBlock>
+
+        <ComponentBlock title="Hoe dringend is dit?" score={task.urgentie.score}>
+          <p className="text-slate-600">{task.urgentie.reden}</p>
+          {task.urgentie.dagen_vervallen !== undefined && (
+            <UrgentieThermometer
+              days={task.urgentie.dagen_vervallen}
+              score={task.urgentie.score}
+            />
+          )}
+          {showSources && (
             <SourceLine>
-              factuur.openstaand_bedrag (deze taak), SUM(factuur.openstaand_bedrag) over open AR
+              factuur.vervaldatum, dispuut.datum_geopend, krediet_event.datum, taak.deadline
             </SourceLine>
-          </>
-        )}
-      </ComponentBlock>
+          )}
+        </ComponentBlock>
 
-      <ComponentBlock title="Hoe dringend is dit?" score={task.urgentie.score}>
-        <p className="text-slate-600">{task.urgentie.reden}</p>
-        {showSources && (
-          <SourceLine>
-            factuur.vervaldatum, dispuut.datum_geopend, krediet_event.datum, taak.deadline
-          </SourceLine>
-        )}
-      </ComponentBlock>
+        <ComponentBlock
+          title="Hoeveel sneller kan deze klant betalen?"
+          score={task.potentieel.score}
+        >
+          <p className="text-slate-600">
+            Deze klant betaalt normaal {task.potentieel.werkelijke_dagen} dagen na de factuurdatum.
+            Afgesproken is {task.potentieel.afgesproken_dagen} dagen — dus{' '}
+            <span className="font-medium text-slate-800">
+              {task.potentieel.werkelijke_dagen - task.potentieel.afgesproken_dagen} dagen langer
+            </span>{' '}
+            dan de afspraak.
+          </p>
+          <PotentieelComparison
+            afgesproken={task.potentieel.afgesproken_dagen}
+            werkelijk={task.potentieel.werkelijke_dagen}
+          />
+          {task.potentieel.pattern && (
+            <div className="pt-2 border-t border-slate-100 mt-2">
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-700">Wanneer betaalt deze klant meestal?</span>
+                  <ConfidencePill value={task.potentieel.pattern.confidence} />
+                </div>
+                {showSources && (
+                  <span className="text-slate-400 font-mono text-[10px]">
+                    {task.potentieel.pattern.pattern_type}
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {patternPlain(task.potentieel.pattern)}
+              </p>
+            </div>
+          )}
+          {showSources && (
+            <SourceLine>
+              standaard_betaaldag pattern recognition (clustering op factuur+betaling),
+              debiteur.standaard_betaaltermijn
+            </SourceLine>
+          )}
+        </ComponentBlock>
+      </div>
 
+      {/* Risico full-width — uniforme kaart-grid met 5 metric-cards op gelijk niveau */}
       <ComponentBlock title="Hoe risicovol is deze klant?" score={task.risico.score}>
-        <ScoreRow
-          label="Hoe betaalt deze klant normaal"
-          score={task.risico.betaalgedrag}
-          source="betaling.betaaldatum vs factuur.vervaldatum (DSO), monthly-DSO-series (trend), betaalintervallen (volatiliteit)"
-          showSource={showSources}
-        />
-        {task.risico.betaalgedrag_breakdown && (
-          <div className="ml-2 pl-3 border-l-2 border-slate-200 space-y-2.5 mt-1 mb-1">
-            <div>
-              <div className="flex items-center justify-between gap-2 text-xs">
-                <span className="text-slate-700">Hoeveel dagen gemiddeld te laat</span>
-                <span className="tabular-nums text-slate-700 shrink-0">
-                  {task.risico.betaalgedrag_breakdown.dso.score} / 5
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                Betaalt gemiddeld {task.risico.betaalgedrag_breakdown.dso.avg_days_late} dagen na de
-                vervaldatum, op basis van {task.risico.betaalgedrag_breakdown.dso.invoice_count}{' '}
-                facturen.
-              </p>
-            </div>
-            <div>
-              <div className="flex items-center justify-between gap-2 text-xs">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="text-slate-700">Gaat het beter of slechter?</span>
-                  <ConfidencePill value={task.risico.betaalgedrag_breakdown.trend.confidence} />
-                </div>
-                <span className="tabular-nums text-slate-700 shrink-0">
-                  {task.risico.betaalgedrag_breakdown.trend.score ?? '—'} / 5
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                {trendPlain(task.risico.betaalgedrag_breakdown.trend, showSources)}
-              </p>
-            </div>
-            <div>
-              <div className="flex items-center justify-between gap-2 text-xs">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="text-slate-700">Hoe voorspelbaar betaalt deze klant?</span>
-                  <ConfidencePill
-                    value={task.risico.betaalgedrag_breakdown.volatiliteit.confidence}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {task.risico.betaalgedrag_breakdown && (
+            <>
+              <MetricCard
+                title="Hoeveel dagen gemiddeld te laat"
+                score={task.risico.betaalgedrag_breakdown.dso.score}
+                caption={`Gemiddeld ${task.risico.betaalgedrag_breakdown.dso.avg_days_late} dagen na de vervaldatum, op basis van ${task.risico.betaalgedrag_breakdown.dso.invoice_count} facturen.`}
+                viz={
+                  <DsoThermometer
+                    days={task.risico.betaalgedrag_breakdown.dso.avg_days_late}
+                    score={task.risico.betaalgedrag_breakdown.dso.score}
                   />
-                </div>
-                <span className="tabular-nums text-slate-700 shrink-0">
-                  {task.risico.betaalgedrag_breakdown.volatiliteit.score ?? '—'} / 5
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                {volatiliteitPlain(task.risico.betaalgedrag_breakdown.volatiliteit, showSources)}
-              </p>
-            </div>
-            <p className="text-[10px] text-slate-400 italic">
-              We kunnen nog niet voorspellen óf deze klant gaat wanbetalen — dat komt in een latere
-              versie. De score hierboven is gebaseerd op wat we wél meten.
-            </p>
-          </div>
-        )}
-        <ScoreRow
-          label="Hoe staan we er nu voor"
-          score={task.risico.huidige_stand}
-          source="factuur.openstaand_bedrag, factuur.vervaldatum (% vervallen, oudste post)"
-          showSource={showSources}
-        />
-        {task.risico.disputen !== null && (
-          <ScoreRow
-            label="Disputen"
-            score={task.risico.disputen}
-            source="dispuut (open + opgelost), factuur (aantal/omzet)"
-            showSource={showSources}
+                }
+              />
+              <MetricCard
+                title="Gaat het beter of slechter?"
+                score={task.risico.betaalgedrag_breakdown.trend.score}
+                confidence={task.risico.betaalgedrag_breakdown.trend.confidence}
+                caption={trendPlain(task.risico.betaalgedrag_breakdown.trend, showSources)}
+                viz={
+                  <TrendSparkline
+                    series={task.risico.betaalgedrag_breakdown.trend.series}
+                    confidence={task.risico.betaalgedrag_breakdown.trend.confidence}
+                  />
+                }
+              />
+              <MetricCard
+                title="Hoe voorspelbaar betaalt deze klant?"
+                score={task.risico.betaalgedrag_breakdown.volatiliteit.score}
+                confidence={task.risico.betaalgedrag_breakdown.volatiliteit.confidence}
+                caption={volatiliteitPlain(
+                  task.risico.betaalgedrag_breakdown.volatiliteit,
+                  showSources,
+                )}
+                viz={
+                  task.debiteurnummer ? (
+                    <VolatilityDotStrip debiteurnummer={task.debiteurnummer} />
+                  ) : undefined
+                }
+              />
+            </>
+          )}
+          <MetricCard
+            title="Hoe staan we er nu voor"
+            score={task.risico.huidige_stand}
+            caption={
+              task.risico.huidige_stand_pct_vervallen !== undefined
+                ? `${Math.round(task.risico.huidige_stand_pct_vervallen)}% van het openstaande bedrag is vervallen${
+                    task.risico.huidige_stand_oudste_dagen
+                      ? ` — oudste post ${task.risico.huidige_stand_oudste_dagen} dagen.`
+                      : '.'
+                  }`
+                : undefined
+            }
+            viz={
+              task.risico.huidige_stand_pct_vervallen !== undefined ? (
+                <HuidigeStandBar
+                  pctVervallen={task.risico.huidige_stand_pct_vervallen}
+                  oudsteDagen={task.risico.huidige_stand_oudste_dagen ?? 0}
+                />
+              ) : undefined
+            }
           />
-        )}
-        {task.risico.krediet !== null && (
-          <ScoreRow
-            label="Kredietverzekering"
-            score={task.risico.krediet}
-            source="krediet_dekking.gedekt_bedrag, krediet_event, externe_score (genormaliseerd)"
-            showSource={showSources}
+          <MetricCard
+            title="Hoe belangrijk is deze klant voor ons"
+            score={task.risico.omzetconcentratie}
+            caption={
+              task.risico.omzetconcentratie_pct !== undefined
+                ? `Goed voor ${task.risico.omzetconcentratie_pct.toFixed(2)}% van onze jaaromzet.`
+                : undefined
+            }
+            viz={
+              task.risico.omzetconcentratie_pct !== undefined ? (
+                <OmzetconcentratieBar pctOmzet={task.risico.omzetconcentratie_pct} />
+              ) : undefined
+            }
           />
-        )}
-        {(task.risico.disputen === null || task.risico.krediet === null) && (
-          <p className="text-xs text-slate-400 italic pt-1">
-            {task.risico.disputen === null && task.risico.krediet === null
-              ? 'Disputen en kredietverzekering zitten niet in de aangeleverde data — die punten tellen daarom niet mee in de score.'
-              : task.risico.disputen === null
-                ? 'Disputen zitten niet in de aangeleverde data.'
-                : 'Kredietverzekering zit niet in de aangeleverde data.'}
-          </p>
-        )}
-        <ScoreRow
-          label="Hoe belangrijk is deze klant voor ons"
-          score={task.risico.omzetconcentratie}
-          source="omzet_historie.omzet (aandeel debiteur in totale AR-scope)"
-          showSource={showSources}
-        />
-      </ComponentBlock>
-
-      <ComponentBlock
-        title="Hoeveel sneller kan deze klant betalen?"
-        score={task.potentieel.score}
-      >
-        <p className="text-slate-600">
-          Deze klant betaalt normaal {task.potentieel.werkelijke_dagen} dagen na de factuurdatum.
-          Afgesproken is {task.potentieel.afgesproken_dagen} dagen — dus{' '}
-          <span className="font-medium text-slate-800">
-            {task.potentieel.werkelijke_dagen - task.potentieel.afgesproken_dagen} dagen langer
-          </span>{' '}
-          dan de afspraak.
-        </p>
-        {task.potentieel.pattern && (
-          <div className="pt-2 border-t border-slate-100 mt-2">
-            <div className="flex items-center justify-between gap-2 text-xs">
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-700">Wanneer betaalt deze klant meestal?</span>
-                <ConfidencePill value={task.potentieel.pattern.confidence} />
-              </div>
-              {showSources && (
-                <span className="text-slate-400 font-mono text-[10px]">
-                  {task.potentieel.pattern.pattern_type}
-                </span>
-              )}
+          {task.risico.disputen !== null && (
+            <MetricCard
+              title="Disputen"
+              score={task.risico.disputen}
+            />
+          )}
+          {task.risico.krediet !== null && (
+            <MetricCard
+              title="Kredietverzekering"
+              score={task.risico.krediet}
+            />
+          )}
+          {(task.risico.disputen === null || task.risico.krediet === null) && (
+            <div className="border border-dashed border-slate-200 rounded-md p-4 text-xs text-slate-400 italic leading-relaxed">
+              <p className="font-medium text-slate-500 not-italic mb-1">Niet beschikbaar in data</p>
+              {task.risico.disputen === null && task.risico.krediet === null
+                ? 'Disputen en kredietverzekering zitten niet in de aangeleverde Covebo-data. Die twee categorieën tellen daarom niet mee — de risico-score is genormaliseerd over de drie wél beschikbare sub-metrics.'
+                : task.risico.disputen === null
+                  ? 'Disputen zitten niet in de aangeleverde data.'
+                  : 'Kredietverzekering zit niet in de aangeleverde data.'}
             </div>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              {patternPlain(task.potentieel.pattern)}
-            </p>
-          </div>
-        )}
-        {showSources && (
-          <SourceLine>
-            standaard_betaaldag pattern recognition (clustering op factuur+betaling),
-            debiteur.standaard_betaaltermijn
-          </SourceLine>
-        )}
-      </ComponentBlock>
-
-      <section className="border-t border-slate-200 pt-4">
-        <h4 className="font-medium text-slate-900 mb-1">Zo komt deze prioriteit tot stand</h4>
-        <p className="text-sm text-slate-600 mb-3">
-          Vier scores van 0 tot 5, elk met een eigen gewicht. Optellen geeft de prioriteit.
-        </p>
-        <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
-          <span className="text-slate-600">Hoeveel levert dit op</span>
-          <span className="text-slate-500">{fmtNL(task.impact.score, 1)}</span>
-          <span className="text-slate-400">× 40%</span>
-          <span className="text-slate-700 text-right">{fmtNL(calc.impact, 2)}</span>
-          <span className="text-slate-600">Hoe dringend</span>
-          <span className="text-slate-500">{fmtNL(task.urgentie.score, 0)}</span>
-          <span className="text-slate-400">× 30%</span>
-          <span className="text-slate-700 text-right">{fmtNL(calc.urgentie, 2)}</span>
-          <span className="text-slate-600">Hoe risicovol</span>
-          <span className="text-slate-500">{fmtNL(task.risico.score, 1)}</span>
-          <span className="text-slate-400">× 20%</span>
-          <span className="text-slate-700 text-right">{fmtNL(calc.risico, 2)}</span>
-          <span className="text-slate-600">Hoeveel sneller mogelijk</span>
-          <span className="text-slate-500">{fmtNL(task.potentieel.score, 0)}</span>
-          <span className="text-slate-400">× 10%</span>
-          <span className="text-slate-700 text-right">{fmtNL(calc.potentieel, 2)}</span>
-          <span className="text-slate-900 font-medium border-t border-slate-200 pt-1.5 mt-1">
-            Totaal
-          </span>
-          <span className="col-span-2 border-t border-slate-200 pt-1.5 mt-1"></span>
-          <span className="text-slate-900 font-semibold text-right border-t border-slate-200 pt-1.5 mt-1">
-            {fmtNL(total, 2)}
-          </span>
+          )}
         </div>
-        {showSources && (
-          <p className="font-mono text-xs text-slate-400 mt-3">
-            ({fmtNL(task.impact.score, 1)} × 0,4) + ({fmtNL(task.urgentie.score, 0)} × 0,3) + (
-            {fmtNL(task.risico.score, 1)} × 0,2) + ({fmtNL(task.potentieel.score, 0)} × 0,1) ={' '}
-            {fmtNL(total, 2)}
-          </p>
-        )}
-      </section>
+      </ComponentBlock>
 
-      <section className="border-t border-slate-100 pt-4 text-slate-400">
-        <h4 className="text-xs uppercase tracking-wide font-medium mb-2">Wat nog niet meedoet</h4>
-        <ul className="text-xs space-y-1 leading-relaxed">
-          <li>
-            <span className="font-medium text-slate-500">Voorspellen of een klant wanbetaalt</span>{' '}
-            · komt in een latere fase (vereist een klein achterliggend rekenmodel).
-          </li>
-          <li>
-            <span className="font-medium text-slate-500">Uitgebreidere uitleg per component</span> ·
-            nu standaardtekst, later met AI verrijkt.
-          </li>
-          <li>
-            <span className="font-medium text-slate-500">Slimmere inschatting type opbrengst</span>{' '}
-            · nu volgens vaste regels op het taaktype.
-          </li>
-        </ul>
-      </section>
+      {/* Factuur-tabellen 2-koloms */}
+      {(taakFacturen.length > 0 || showAlleOpenPosten) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          {taakFacturen.length > 0 && (
+            <FactuurCard
+              title="Onderliggende facturen voor deze taak"
+              subtitle="Openstaande facturen van dezelfde klant die 14 dagen of meer vervallen zijn worden gegroepeerd in één taak."
+              facturen={taakFacturen}
+              highlightIds={taakIds}
+            />
+          )}
+          {showAlleOpenPosten && (
+            <FactuurCard title="Alle open posten" facturen={allOpen} highlightIds={taakIds} />
+          )}
+        </div>
+      )}
+
+      {/* Onderste rij: Berekening + Wat nog niet meedoet, 2-koloms */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <section className="border border-slate-200 rounded-md p-4">
+          <h4 className="font-medium text-slate-900 mb-1">Zo komt deze prioriteit tot stand</h4>
+          <p className="text-sm text-slate-600 mb-3">
+            Vier scores van 0 tot 5, elk met een eigen gewicht. Optellen geeft de prioriteit.
+          </p>
+          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
+            <span className="text-slate-600">Hoeveel levert dit op</span>
+            <span className="text-slate-500">{fmtNL(task.impact.score, 1)}</span>
+            <span className="text-slate-400">× 40%</span>
+            <span className="text-slate-700 text-right">{fmtNL(calc.impact, 2)}</span>
+            <span className="text-slate-600">Hoe dringend</span>
+            <span className="text-slate-500">{fmtNL(task.urgentie.score, 0)}</span>
+            <span className="text-slate-400">× 30%</span>
+            <span className="text-slate-700 text-right">{fmtNL(calc.urgentie, 2)}</span>
+            <span className="text-slate-600">Hoe risicovol</span>
+            <span className="text-slate-500">{fmtNL(task.risico.score, 1)}</span>
+            <span className="text-slate-400">× 20%</span>
+            <span className="text-slate-700 text-right">{fmtNL(calc.risico, 2)}</span>
+            <span className="text-slate-600">Hoeveel sneller mogelijk</span>
+            <span className="text-slate-500">{fmtNL(task.potentieel.score, 0)}</span>
+            <span className="text-slate-400">× 10%</span>
+            <span className="text-slate-700 text-right">{fmtNL(calc.potentieel, 2)}</span>
+            <span className="text-slate-900 font-medium border-t border-slate-200 pt-1.5 mt-1">
+              Totaal
+            </span>
+            <span className="col-span-2 border-t border-slate-200 pt-1.5 mt-1"></span>
+            <span className="text-slate-900 font-semibold text-right border-t border-slate-200 pt-1.5 mt-1">
+              {fmtNL(total, 2)}
+            </span>
+          </div>
+          {showSources && (
+            <p className="font-mono text-xs text-slate-400 mt-3">
+              ({fmtNL(task.impact.score, 1)} × 0,4) + ({fmtNL(task.urgentie.score, 0)} × 0,3) + (
+              {fmtNL(task.risico.score, 1)} × 0,2) + ({fmtNL(task.potentieel.score, 0)} × 0,1) ={' '}
+              {fmtNL(total, 2)}
+            </p>
+          )}
+        </section>
+
+        <section className="border border-slate-200 rounded-md p-4 text-slate-400">
+          <h4 className="text-xs uppercase tracking-wide font-medium text-slate-500 mb-2">
+            Wat nog niet meedoet
+          </h4>
+          <ul className="text-xs space-y-1 leading-relaxed">
+            <li>
+              <span className="font-medium text-slate-500">
+                Voorspellen of een klant wanbetaalt
+              </span>{' '}
+              · komt in een latere fase (vereist een klein achterliggend rekenmodel).
+            </li>
+            <li>
+              <span className="font-medium text-slate-500">
+                Uitgebreidere uitleg per component
+              </span>{' '}
+              · nu standaardtekst, later met AI verrijkt.
+            </li>
+            <li>
+              <span className="font-medium text-slate-500">
+                Slimmere inschatting type opbrengst
+              </span>{' '}
+              · nu volgens vaste regels op het taaktype.
+            </li>
+          </ul>
+        </section>
+      </div>
     </div>
   )
 }
@@ -937,22 +1409,84 @@ function DetailView({
   showSources,
   setShowSources,
   onBack,
+  index,
+  total,
+  onPrev,
+  onNext,
 }: {
   task: Task
   showSources: boolean
   setShowSources: (b: boolean) => void
   onBack: () => void
+  index: number
+  total: number
+  onPrev: () => void
+  onNext: () => void
 }) {
+  const hasPrev = index > 0
+  const hasNext = index < total - 1
+
+  // Keyboard-shortcuts ← / → om door taken te bladeren. Negeer wanneer
+  // de gebruiker in een input/textarea/contentEditable bezig is.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === 'ArrowLeft' && hasPrev) {
+        e.preventDefault()
+        onPrev()
+      } else if (e.key === 'ArrowRight' && hasNext) {
+        e.preventDefault()
+        onNext()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [hasPrev, hasNext, onPrev, onNext])
+
+  const navBtn =
+    'inline-flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-slate-700 transition-colors'
+
   return (
     <>
       <AppHeader showSources={showSources} setShowSources={setShowSources} />
-      <main className="max-w-3xl mx-auto px-6 py-6">
-        <button
-          onClick={onBack}
-          className="text-sm text-slate-600 hover:text-slate-900 mb-4 flex items-center gap-1"
-        >
-          <span aria-hidden>←</span> Terug naar takenlijst
-        </button>
+      <main className="max-w-7xl mx-auto px-6 py-6">
+        <div className="flex items-center justify-between gap-4 mb-4">
+          <button
+            onClick={onBack}
+            className="text-sm text-slate-600 hover:text-slate-900 flex items-center gap-1"
+          >
+            <span aria-hidden>←</span> Terug naar takenlijst
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onPrev}
+              disabled={!hasPrev}
+              className={navBtn}
+              aria-label="Vorige taak"
+              title="Vorige taak (←)"
+            >
+              <span aria-hidden>←</span>
+              <span className="hidden sm:inline">Vorige</span>
+            </button>
+            <span className="text-sm text-slate-500 tabular-nums px-1">
+              Taak {index + 1} van {total}
+            </span>
+            <button
+              type="button"
+              onClick={onNext}
+              disabled={!hasNext}
+              className={navBtn}
+              aria-label="Volgende taak"
+              title="Volgende taak (→)"
+            >
+              <span className="hidden sm:inline">Volgende</span>
+              <span aria-hidden>→</span>
+            </button>
+          </div>
+        </div>
         <div className="bg-white rounded-md border border-slate-200">
           <Detail task={task} showSources={showSources} />
         </div>
@@ -974,7 +1508,8 @@ export default function App() {
   const containerClasses = 'min-h-screen bg-slate-100 text-slate-900'
 
   if (route.name === 'detail') {
-    const task = sorted.find((t) => t.id === route.taskId)
+    const index = sorted.findIndex((t) => t.id === route.taskId)
+    const task = index >= 0 ? sorted[index] : undefined
     if (!task) {
       // Onbekende taak-id — terug naar lijst
       navigate({ name: 'list' })
@@ -987,6 +1522,15 @@ export default function App() {
           showSources={showSources}
           setShowSources={setShowSources}
           onBack={() => navigate({ name: 'list' })}
+          index={index}
+          total={sorted.length}
+          onPrev={() =>
+            index > 0 && navigate({ name: 'detail', taskId: sorted[index - 1].id })
+          }
+          onNext={() =>
+            index < sorted.length - 1 &&
+            navigate({ name: 'detail', taskId: sorted[index + 1].id })
+          }
         />
       </div>
     )
