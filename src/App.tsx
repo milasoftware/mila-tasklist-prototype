@@ -444,16 +444,18 @@ function OmzetconcentratieBar({ pctOmzet }: { pctOmzet: number }) {
 }
 
 // Compacte cirkel-indicator voor een score van 0-max. Kleinere broer
-// van PriorityRing — geen tooltip, geen "van 5" bijschrift, schaalbaar
-// via de size prop.
+// van PriorityRing — schaalbaar via de size prop. Met optionele
+// hover-tooltip die de berekening uitlegt.
 function ScoreRing({
   score,
   size = 48,
   max = 5,
+  tooltip,
 }: {
   score: number | null
   size?: number
   max?: number
+  tooltip?: React.ReactNode
 }) {
   const stroke = Math.max(4, Math.round(size / 10))
   const radius = (size - stroke) / 2
@@ -475,8 +477,11 @@ function ScoreRing({
 
   const fontSizeClass = size >= 56 ? 'text-lg' : size >= 44 ? 'text-sm' : 'text-xs'
 
-  return (
-    <div className="relative shrink-0" style={{ width: size, height: size }}>
+  const ring = (
+    <div
+      className={`relative shrink-0 ${tooltip ? 'cursor-help' : ''}`}
+      style={{ width: size, height: size }}
+    >
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <circle
           cx={size / 2}
@@ -509,6 +514,74 @@ function ScoreRing({
       </div>
     </div>
   )
+
+  if (!tooltip) return ring
+
+  return (
+    <div className="group relative shrink-0">
+      {ring}
+      <div
+        className="absolute right-0 top-full mt-2 hidden group-hover:block z-20 bg-slate-900 text-white rounded-md p-3 shadow-xl pointer-events-none"
+        style={{ width: 280 }}
+      >
+        {tooltip}
+      </div>
+    </div>
+  )
+}
+
+// Generieke tooltip-content voor een score-cirkel. Toont titel, korte
+// beschrijving van wat er gemeten wordt, een schaal-tabel met de
+// drempels (actieve score uitgelicht), en optioneel een huidige meting.
+function ScoreTooltip({
+  title,
+  description,
+  thresholds,
+  current,
+  activeScore,
+  composition,
+}: {
+  title: string
+  description?: React.ReactNode
+  thresholds?: { score: number | null; label: string }[]
+  current?: React.ReactNode
+  activeScore?: number | null
+  composition?: React.ReactNode
+}) {
+  return (
+    <div className="text-xs">
+      <p className="font-medium text-white text-[12px] mb-1">{title}</p>
+      {description && (
+        <p className="text-white/70 text-[11px] leading-snug mb-2">{description}</p>
+      )}
+      {composition}
+      {thresholds && (
+        <div className="mt-1">
+          <p className="text-[10px] uppercase tracking-wide text-white/50 mb-1">Schaal</p>
+          <table className="w-full text-[11px]">
+            <tbody>
+              {thresholds.map((t, i) => {
+                const active = t.score != null && t.score === activeScore
+                return (
+                  <tr key={i} className={active ? 'text-white' : 'text-white/60'}>
+                    <td className="pr-2 py-0.5 w-5 tabular-nums">
+                      {t.score == null ? '—' : t.score}
+                    </td>
+                    <td className={`py-0.5 ${active ? 'font-medium' : ''}`}>{t.label}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {current && (
+        <p className="text-white/80 text-[11px] leading-snug pt-2 mt-2 border-t border-white/20">
+          {current}
+        </p>
+      )}
+    </div>
+  )
 }
 
 // Uniforme kaart voor één metric in de risico-sectie. Titel + score
@@ -520,12 +593,14 @@ function MetricCard({
   confidence,
   caption,
   viz,
+  tooltip,
 }: {
   title: string
   score: number | null
   confidence?: Confidence
   caption?: React.ReactNode
   viz?: React.ReactNode
+  tooltip?: React.ReactNode
 }) {
   return (
     <div className="border border-slate-200 rounded-md p-4 flex flex-col">
@@ -534,7 +609,7 @@ function MetricCard({
           <span className="text-sm font-medium text-slate-800 leading-snug">{title}</span>
           {confidence && <ConfidencePill value={confidence} />}
         </div>
-        <ScoreRing score={score} size={40} />
+        <ScoreRing score={score} size={40} tooltip={tooltip} />
       </div>
       {caption && <p className="text-xs text-slate-500 leading-snug mb-2">{caption}</p>}
       {viz && <div className="mt-auto">{viz}</div>}
@@ -749,6 +824,239 @@ function patternPlain(p: {
           ? p.pattern_value
           : p.pattern_value
   return `Betaalt meestal ${where} — gebeurde zo bij ${p.fit_pct}% van ${p.payments_observed} betalingen.`
+}
+
+// ----- tooltip-builders per score-type --------------------------------------
+//
+// Eén helper per ScoreRing op de detail-pagina. Drempels komen 1-op-1
+// uit scripts/preprocess.mjs zodat de tooltips altijd de échte
+// rekenregels weergeven.
+
+function tooltipImpact(score: number, bedrag: number | undefined): React.ReactNode {
+  const t = meta.bedrag_buckets.thresholds
+  return (
+    <ScoreTooltip
+      title="Hoeveel levert dit op"
+      description="Score op basis van het openstaande bedrag, vergeleken met alle 445 taken in vijf even grote groepen (kwintielen)."
+      thresholds={[
+        { score: 1, label: `< ${fmtEUR(t[0])}` },
+        { score: 2, label: `${fmtEUR(t[0])} – ${fmtEUR(t[1])}` },
+        { score: 3, label: `${fmtEUR(t[1])} – ${fmtEUR(t[2])}` },
+        { score: 4, label: `${fmtEUR(t[2])} – ${fmtEUR(t[3])}` },
+        { score: 5, label: `≥ ${fmtEUR(t[3])}` },
+      ]}
+      activeScore={score}
+      current={bedrag !== undefined ? `Deze taak: ${fmtEUR(bedrag)} → score ${score}` : undefined}
+    />
+  )
+}
+
+function tooltipUrgentie(score: number, dagenVervallen: number | undefined): React.ReactNode {
+  return (
+    <ScoreTooltip
+      title="Hoe dringend"
+      description="Score op basis van het aantal dagen dat de oudste factuur in deze taak vervallen is."
+      thresholds={[
+        { score: 1, label: 'vandaag of nog niet vervallen' },
+        { score: 2, label: '1 – 13 dagen vervallen' },
+        { score: 3, label: '14 – 29 dagen vervallen' },
+        { score: 4, label: '30 – 59 dagen vervallen' },
+        { score: 5, label: '60+ dagen vervallen' },
+      ]}
+      activeScore={score}
+      current={
+        dagenVervallen !== undefined
+          ? `Oudste factuur ${dagenVervallen}d vervallen → score ${score}`
+          : undefined
+      }
+    />
+  )
+}
+
+function tooltipPotentieel(
+  score: number,
+  werkelijk: number,
+  afgesproken: number,
+): React.ReactNode {
+  const diff = werkelijk - afgesproken
+  return (
+    <ScoreTooltip
+      title="Hoeveel sneller mogelijk"
+      description="Score op basis van het verschil tussen wat er afgesproken is en wat er werkelijk gebeurt — gemiddeld over alle betaalde facturen van deze klant."
+      thresholds={[
+        { score: 0, label: 'binnen afspraak (geen ruimte)' },
+        { score: 1, label: '1 – 10 dagen langer' },
+        { score: 2, label: '11 – 30 dagen langer' },
+        { score: 3, label: '31 – 60 dagen langer' },
+        { score: 4, label: '61 – 90 dagen langer' },
+        { score: 5, label: '> 90 dagen langer' },
+      ]}
+      activeScore={score}
+      current={`Werkelijk ${werkelijk}d vs. afgesproken ${afgesproken}d = ${diff > 0 ? '+' : ''}${diff}d → score ${score}`}
+    />
+  )
+}
+
+function tooltipRisico(task: Task): React.ReactNode {
+  const bg = task.risico.betaalgedrag
+  const hs = task.risico.huidige_stand
+  const oc = task.risico.omzetconcentratie
+  return (
+    <ScoreTooltip
+      title="Hoe risicovol"
+      description="Gewogen gemiddelde van drie deelscores. Disputen en kredietverzekering ontbreken in de Covebo-data en tellen niet mee — de score is genormaliseerd over de drie wél beschikbare metrics."
+      composition={
+        <table className="w-full text-[11px] tabular-nums mb-2">
+          <tbody className="text-white/80">
+            <tr>
+              <td className="pr-2 py-0.5">Betaalgedrag</td>
+              <td className="text-right pr-1">{fmtNL(bg, 1)}</td>
+              <td className="text-white/50 pl-1">× 30/65</td>
+            </tr>
+            <tr>
+              <td className="pr-2 py-0.5">Huidige stand</td>
+              <td className="text-right pr-1">{fmtNL(hs, 0)}</td>
+              <td className="text-white/50 pl-1">× 25/65</td>
+            </tr>
+            <tr>
+              <td className="pr-2 py-0.5">Omzetconcentratie</td>
+              <td className="text-right pr-1">{fmtNL(oc, 0)}</td>
+              <td className="text-white/50 pl-1">× 10/65</td>
+            </tr>
+            <tr className="border-t border-white/20">
+              <td className="font-medium pt-1">Risico-score</td>
+              <td className="text-right font-semibold pt-1 pr-1">{fmtNL(task.risico.score, 2)}</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      }
+    />
+  )
+}
+
+function tooltipDso(score: number, days: number, count: number): React.ReactNode {
+  return (
+    <ScoreTooltip
+      title="Hoeveel dagen gemiddeld te laat"
+      description="Hoeveel dagen er gemiddeld over de vervaldatum heen wordt gegaan op betaalde facturen (DSO na vervaldatum)."
+      thresholds={[
+        { score: 1, label: 'op tijd of eerder' },
+        { score: 2, label: '1 – 10 dagen te laat' },
+        { score: 3, label: '11 – 30 dagen te laat' },
+        { score: 4, label: '31 – 60 dagen te laat' },
+        { score: 5, label: '60+ dagen te laat' },
+      ]}
+      activeScore={score}
+      current={`Gem. ${days}d te laat over ${count} betaalde facturen → score ${score}`}
+    />
+  )
+}
+
+function tooltipTrend(
+  score: number | null,
+  tau: number,
+  pValue: number,
+  monthsObserved: number,
+  confidence: Confidence,
+): React.ReactNode {
+  return (
+    <ScoreTooltip
+      title="Gaat het beter of slechter"
+      description="Mann-Kendall trend-test op de maandelijkse DSO. Detecteert of de klant systematisch later (of juist eerder) is gaan betalen. Positieve τ = stijgende DSO = verslechterend."
+      thresholds={[
+        { score: 1, label: 'τ ≤ −0,4 (sterk verbeterend)' },
+        { score: 2, label: '−0,4 < τ ≤ −0,2 (verbeterend)' },
+        { score: 3, label: '−0,2 < τ < 0,2 (stabiel)' },
+        { score: 4, label: '0,2 ≤ τ < 0,4 (verslechterend)' },
+        { score: 5, label: 'τ ≥ 0,4 (sterk verslechterend)' },
+      ]}
+      activeScore={score}
+      current={
+        confidence === 'geen'
+          ? `Te weinig data (${monthsObserved} maanden of geen significantie, p=${pValue}) → geen score`
+          : `τ=${tau}, p=${pValue} over ${monthsObserved} maanden → score ${score}`
+      }
+    />
+  )
+}
+
+function tooltipVolatiliteit(
+  score: number | null,
+  cv: number,
+  intervalsObserved: number,
+  confidence: Confidence,
+): React.ReactNode {
+  return (
+    <ScoreTooltip
+      title="Hoe voorspelbaar"
+      description="Coefficient of variation (CV) op de tijd tussen opeenvolgende betalingen. Lage CV = regelmatig, hoge CV = grillig."
+      thresholds={[
+        { score: 1, label: 'CV < 0,3 (zeer regelmatig)' },
+        { score: 2, label: '0,3 ≤ CV < 0,6 (regelmatig)' },
+        { score: 3, label: '0,6 ≤ CV < 1,0 (wisselend)' },
+        { score: 4, label: '1,0 ≤ CV < 1,5 (onregelmatig)' },
+        { score: 5, label: 'CV ≥ 1,5 (zeer grillig)' },
+      ]}
+      activeScore={score}
+      current={
+        confidence === 'geen'
+          ? `Te weinig data (${intervalsObserved} betaalintervallen) → geen score`
+          : `CV=${cv} over ${intervalsObserved} betaalintervallen → score ${score}`
+      }
+    />
+  )
+}
+
+function tooltipHuidigeStand(
+  score: number,
+  pctVervallen: number | undefined,
+  oudsteDagen: number | undefined,
+): React.ReactNode {
+  return (
+    <ScoreTooltip
+      title="Hoe staan we er nu voor"
+      description="Aandeel van het openstaande bedrag bij deze klant dat al vervallen is."
+      thresholds={[
+        { score: 1, label: '< 5% vervallen' },
+        { score: 2, label: '5 – 25% vervallen' },
+        { score: 3, label: '25 – 50% vervallen' },
+        { score: 4, label: '50 – 75% vervallen' },
+        { score: 5, label: '≥ 75% vervallen' },
+      ]}
+      activeScore={score}
+      current={
+        pctVervallen !== undefined
+          ? `${Math.round(pctVervallen)}% vervallen${oudsteDagen ? ` · oudste post ${oudsteDagen}d` : ''} → score ${score}`
+          : undefined
+      }
+    />
+  )
+}
+
+function tooltipOmzetconcentratie(
+  score: number,
+  pctOmzet: number | undefined,
+): React.ReactNode {
+  return (
+    <ScoreTooltip
+      title="Hoe belangrijk is deze klant"
+      description="Aandeel van deze klant in onze totale jaaromzet. Hoe groter het aandeel, hoe meer impact wanbetaling zou hebben."
+      thresholds={[
+        { score: 1, label: '< 0,5% van jaaromzet' },
+        { score: 2, label: '0,5 – 2%' },
+        { score: 3, label: '2 – 5%' },
+        { score: 4, label: '5 – 15%' },
+        { score: 5, label: '≥ 15%' },
+      ]}
+      activeScore={score}
+      current={
+        pctOmzet !== undefined
+          ? `${pctOmzet.toFixed(2)}% van jaaromzet → score ${score}`
+          : undefined
+      }
+    />
+  )
 }
 
 function TaskRow({ task, selected, onClick }: { task: Task; selected: boolean; onClick: () => void }) {
@@ -995,17 +1303,19 @@ function ComponentBlock({
   score,
   lead,
   children,
+  tooltip,
 }: {
   title: string
   score: number
   lead?: React.ReactNode
   children: React.ReactNode
+  tooltip?: React.ReactNode
 }) {
   return (
     <section className="border border-slate-200 rounded-md p-4">
       <div className="flex items-start justify-between mb-3 gap-3">
         <h4 className="font-medium text-slate-900">{title}</h4>
-        <ScoreRing score={score} size={56} />
+        <ScoreRing score={score} size={56} tooltip={tooltip} />
       </div>
       {lead && <div className="mb-3 text-sm text-slate-700">{lead}</div>}
       <div className="space-y-2 text-sm text-slate-700">{children}</div>
@@ -1048,6 +1358,7 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         <ComponentBlock
           title="Hoeveel levert dit op?"
           score={task.impact.score}
+          tooltip={tooltipImpact(task.impact.score, task.impact.bedrag)}
           lead={
             task.impact.bedrag !== undefined ? (
               <p>
@@ -1081,7 +1392,11 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           )}
         </ComponentBlock>
 
-        <ComponentBlock title="Hoe dringend is dit?" score={task.urgentie.score}>
+        <ComponentBlock
+          title="Hoe dringend is dit?"
+          score={task.urgentie.score}
+          tooltip={tooltipUrgentie(task.urgentie.score, task.urgentie.dagen_vervallen)}
+        >
           <p className="text-slate-600">{task.urgentie.reden}</p>
           {task.urgentie.dagen_vervallen !== undefined && (
             <UrgentieThermometer
@@ -1099,6 +1414,11 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         <ComponentBlock
           title="Hoeveel sneller kan deze klant betalen?"
           score={task.potentieel.score}
+          tooltip={tooltipPotentieel(
+            task.potentieel.score,
+            task.potentieel.werkelijke_dagen,
+            task.potentieel.afgesproken_dagen,
+          )}
         >
           <p className="text-slate-600">
             Deze klant betaalt normaal {task.potentieel.werkelijke_dagen} dagen na de factuurdatum.
@@ -1140,13 +1460,22 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
       </div>
 
       {/* Risico full-width — uniforme kaart-grid met 5 metric-cards op gelijk niveau */}
-      <ComponentBlock title="Hoe risicovol is deze klant?" score={task.risico.score}>
+      <ComponentBlock
+        title="Hoe risicovol is deze klant?"
+        score={task.risico.score}
+        tooltip={tooltipRisico(task)}
+      >
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {task.risico.betaalgedrag_breakdown && (
             <>
               <MetricCard
                 title="Hoeveel dagen gemiddeld te laat"
                 score={task.risico.betaalgedrag_breakdown.dso.score}
+                tooltip={tooltipDso(
+                  task.risico.betaalgedrag_breakdown.dso.score,
+                  task.risico.betaalgedrag_breakdown.dso.avg_days_late,
+                  task.risico.betaalgedrag_breakdown.dso.invoice_count,
+                )}
                 caption={`Gemiddeld ${task.risico.betaalgedrag_breakdown.dso.avg_days_late} dagen na de vervaldatum, op basis van ${task.risico.betaalgedrag_breakdown.dso.invoice_count} facturen.`}
                 viz={
                   <DsoThermometer
@@ -1159,6 +1488,13 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
                 title="Gaat het beter of slechter?"
                 score={task.risico.betaalgedrag_breakdown.trend.score}
                 confidence={task.risico.betaalgedrag_breakdown.trend.confidence}
+                tooltip={tooltipTrend(
+                  task.risico.betaalgedrag_breakdown.trend.score,
+                  task.risico.betaalgedrag_breakdown.trend.tau,
+                  task.risico.betaalgedrag_breakdown.trend.p_value,
+                  task.risico.betaalgedrag_breakdown.trend.months_observed,
+                  task.risico.betaalgedrag_breakdown.trend.confidence,
+                )}
                 caption={trendPlain(task.risico.betaalgedrag_breakdown.trend, showSources)}
                 viz={
                   <TrendSparkline
@@ -1171,6 +1507,12 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
                 title="Hoe voorspelbaar betaalt deze klant?"
                 score={task.risico.betaalgedrag_breakdown.volatiliteit.score}
                 confidence={task.risico.betaalgedrag_breakdown.volatiliteit.confidence}
+                tooltip={tooltipVolatiliteit(
+                  task.risico.betaalgedrag_breakdown.volatiliteit.score,
+                  task.risico.betaalgedrag_breakdown.volatiliteit.cv,
+                  task.risico.betaalgedrag_breakdown.volatiliteit.intervals_observed,
+                  task.risico.betaalgedrag_breakdown.volatiliteit.confidence,
+                )}
                 caption={volatiliteitPlain(
                   task.risico.betaalgedrag_breakdown.volatiliteit,
                   showSources,
@@ -1186,6 +1528,11 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           <MetricCard
             title="Hoe staan we er nu voor"
             score={task.risico.huidige_stand}
+            tooltip={tooltipHuidigeStand(
+              task.risico.huidige_stand,
+              task.risico.huidige_stand_pct_vervallen,
+              task.risico.huidige_stand_oudste_dagen,
+            )}
             caption={
               task.risico.huidige_stand_pct_vervallen !== undefined
                 ? `${Math.round(task.risico.huidige_stand_pct_vervallen)}% van het openstaande bedrag is vervallen${
@@ -1207,6 +1554,10 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           <MetricCard
             title="Hoe belangrijk is deze klant voor ons"
             score={task.risico.omzetconcentratie}
+            tooltip={tooltipOmzetconcentratie(
+              task.risico.omzetconcentratie,
+              task.risico.omzetconcentratie_pct,
+            )}
             caption={
               task.risico.omzetconcentratie_pct !== undefined
                 ? `Goed voor ${task.risico.omzetconcentratie_pct.toFixed(2)}% van onze jaaromzet.`
