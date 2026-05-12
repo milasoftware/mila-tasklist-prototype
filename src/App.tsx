@@ -332,9 +332,10 @@ function UrgentieThermometer({ days, score }: { days: number; score: number }) {
   )
 }
 
-// Vergelijking van afgesproken vs. werkelijke betaaltermijn als twee
-// horizontale balkjes op één schaal — visueel valt direct op hoeveel
-// langer de werkelijkheid is dan de afspraak.
+// Vergelijking van afgesproken vs. werkelijke betaaltermijn op één
+// tijdlijn-balk. Groen stipje = afgesproken moment, oranje streepje =
+// werkelijk moment. Het stuk tussen beide markers is oranje gearceerd
+// zodat de overschrijding meteen opvalt.
 function PotentieelComparison({
   afgesproken,
   werkelijk,
@@ -342,39 +343,55 @@ function PotentieelComparison({
   afgesproken: number
   werkelijk: number
 }) {
-  // Schaalwaarde: ruim genoeg om beide balken comfortabel te tonen
+  // Schaalwaarde: ruim genoeg om beide markers comfortabel te tonen
   const max = Math.max(werkelijk, afgesproken * 1.5, 30)
   const pctA = (afgesproken / max) * 100
   const pctW = (werkelijk / max) * 100
   const diff = werkelijk - afgesproken
+  const teLaat = diff > 0
+
   return (
-    <div className="mt-1.5 space-y-2">
-      <div>
-        <div className="flex justify-between text-[10px] text-slate-500 mb-0.5">
-          <span>Afgesproken</span>
-          <span className="tabular-nums">{afgesproken} dagen</span>
-        </div>
-        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+    <div className="mt-2">
+      <div className="relative h-4">
+        {/* Track */}
+        <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1.5 bg-slate-100 rounded-full" />
+
+        {/* Gearceerd segment tussen afgesproken en werkelijk (alleen als te laat) */}
+        {teLaat && (
           <div
-            className="h-full bg-emerald-400 rounded-full"
-            style={{ width: `${pctA}%` }}
+            className="absolute top-1/2 -translate-y-1/2 h-1.5 bg-orange-200"
+            style={{ left: `${pctA}%`, width: `${pctW - pctA}%` }}
           />
-        </div>
+        )}
+
+        {/* Afgesproken: groen stipje */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-emerald-500 border-2 border-white shadow-sm"
+          style={{ left: `${pctA}%` }}
+          title={`Afgesproken: ${afgesproken} dagen`}
+        />
+
+        {/* Werkelijk: oranje verticale streep */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-1 h-4 bg-orange-500 rounded-sm"
+          style={{ left: `${pctW}%` }}
+          title={`Werkelijk: ${werkelijk} dagen`}
+        />
       </div>
-      <div>
-        <div className="flex justify-between text-[10px] text-slate-500 mb-0.5">
-          <span>Werkelijk</span>
-          <span className="tabular-nums">
-            {werkelijk} dagen
-            {diff > 0 && <span className="text-orange-600"> · +{diff}d langer</span>}
-          </span>
-        </div>
-        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-          <div
-            className="h-full bg-orange-400 rounded-full"
-            style={{ width: `${pctW}%` }}
-          />
-        </div>
+
+      {/* Legenda met waardes */}
+      <div className="flex items-center gap-4 mt-2 text-[10px] text-slate-500">
+        <span className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+          Afgesproken{' '}
+          <span className="tabular-nums text-slate-700 font-medium">{afgesproken}d</span>
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-0.5 h-2.5 bg-orange-500 inline-block" />
+          Werkelijk{' '}
+          <span className="tabular-nums text-slate-700 font-medium">{werkelijk}d</span>
+        </span>
+        {teLaat && <span className="text-orange-600 ml-auto">+{diff}d langer</span>}
       </div>
     </div>
   )
@@ -426,6 +443,74 @@ function OmzetconcentratieBar({ pctOmzet }: { pctOmzet: number }) {
   )
 }
 
+// Compacte cirkel-indicator voor een score van 0-max. Kleinere broer
+// van PriorityRing — geen tooltip, geen "van 5" bijschrift, schaalbaar
+// via de size prop.
+function ScoreRing({
+  score,
+  size = 48,
+  max = 5,
+}: {
+  score: number | null
+  size?: number
+  max?: number
+}) {
+  const stroke = Math.max(4, Math.round(size / 10))
+  const radius = (size - stroke) / 2
+  const circumference = 2 * Math.PI * radius
+  const fraction = score == null ? 0 : Math.max(0, Math.min(1, score / max))
+  const offset = circumference * (1 - fraction)
+
+  // Kleur volgt het priorityTone-schema voor visuele consistentie.
+  const strokeColorClass =
+    score == null
+      ? 'text-slate-200'
+      : score >= 4
+        ? 'text-red-500'
+        : score >= 3
+          ? 'text-orange-500'
+          : score >= 2
+            ? 'text-amber-400'
+            : 'text-slate-400'
+
+  const fontSizeClass = size >= 56 ? 'text-lg' : size >= 44 ? 'text-sm' : 'text-xs'
+
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke="rgb(241 245 249)"
+          strokeWidth={stroke}
+        />
+        {score != null && (
+          <circle
+            className={strokeColorClass}
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={stroke}
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            strokeLinecap="round"
+            transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          />
+        )}
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className={`${fontSizeClass} font-semibold text-slate-900 tabular-nums leading-none`}>
+          {score == null ? '—' : fmtNL(score, score % 1 === 0 ? 0 : 1)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // Uniforme kaart voor één metric in de risico-sectie. Titel + score
 // linkboven, optionele confidence-pill ernaast, caption eronder, viz
 // onderaan. Vult de breedte van zijn grid-cel.
@@ -442,16 +527,14 @@ function MetricCard({
   caption?: React.ReactNode
   viz?: React.ReactNode
 }) {
-  const scoreDisplay =
-    score == null ? '—' : fmtNL(score, score % 1 === 0 ? 0 : 1)
   return (
     <div className="border border-slate-200 rounded-md p-4 flex flex-col">
-      <div className="flex items-start justify-between gap-2 mb-1">
+      <div className="flex items-start justify-between gap-3 mb-1">
         <div className="flex items-center gap-1.5 min-w-0 flex-1">
           <span className="text-sm font-medium text-slate-800 leading-snug">{title}</span>
           {confidence && <ConfidencePill value={confidence} />}
         </div>
-        <span className="text-sm tabular-nums text-slate-700 shrink-0">{scoreDisplay} / 5</span>
+        <ScoreRing score={score} size={40} />
       </div>
       {caption && <p className="text-xs text-slate-500 leading-snug mb-2">{caption}</p>}
       {viz && <div className="mt-auto">{viz}</div>}
@@ -885,10 +968,12 @@ function DebtorStatsBar({ task, showSources }: { task: Task; showSources: boolea
 // Eén factuur-tabel als losstaande card, voor side-by-side gebruik.
 function FactuurCard({
   title,
+  subtitle,
   facturen,
   highlightIds,
 }: {
   title: string
+  subtitle?: React.ReactNode
   facturen: Factuur[]
   highlightIds?: Set<string>
 }) {
@@ -897,6 +982,9 @@ function FactuurCard({
       <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">
         {title} ({facturen.length})
       </p>
+      {subtitle && (
+        <p className="text-xs text-slate-500 mb-3 leading-relaxed">{subtitle}</p>
+      )}
       <FactuurTable facturen={facturen} highlightIds={highlightIds} />
     </section>
   )
@@ -915,17 +1003,11 @@ function ComponentBlock({
 }) {
   return (
     <section className="border border-slate-200 rounded-md p-4">
-      <div className="flex items-baseline justify-between mb-3 gap-3">
+      <div className="flex items-start justify-between mb-3 gap-3">
         <h4 className="font-medium text-slate-900">{title}</h4>
-        <div className="text-right shrink-0">
-          <span className="text-2xl font-semibold tabular-nums text-slate-900">
-            {fmtNL(score, score % 1 === 0 ? 0 : 1)}
-          </span>
-          <span className="text-sm text-slate-500"> / 5</span>
-        </div>
+        <ScoreRing score={score} size={56} />
       </div>
       {lead && <div className="mb-3 text-sm text-slate-700">{lead}</div>}
-      <div className="mb-3"><Bar value={score} /></div>
       <div className="space-y-2 text-sm text-slate-700">{children}</div>
     </section>
   )
@@ -1167,6 +1249,7 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           {taakFacturen.length > 0 && (
             <FactuurCard
               title="Onderliggende facturen voor deze taak"
+              subtitle="Openstaande facturen van dezelfde klant die 14 dagen of meer vervallen zijn worden gegroepeerd in één taak."
               facturen={taakFacturen}
               highlightIds={taakIds}
             />
@@ -1326,22 +1409,84 @@ function DetailView({
   showSources,
   setShowSources,
   onBack,
+  index,
+  total,
+  onPrev,
+  onNext,
 }: {
   task: Task
   showSources: boolean
   setShowSources: (b: boolean) => void
   onBack: () => void
+  index: number
+  total: number
+  onPrev: () => void
+  onNext: () => void
 }) {
+  const hasPrev = index > 0
+  const hasNext = index < total - 1
+
+  // Keyboard-shortcuts ← / → om door taken te bladeren. Negeer wanneer
+  // de gebruiker in een input/textarea/contentEditable bezig is.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === 'ArrowLeft' && hasPrev) {
+        e.preventDefault()
+        onPrev()
+      } else if (e.key === 'ArrowRight' && hasNext) {
+        e.preventDefault()
+        onNext()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [hasPrev, hasNext, onPrev, onNext])
+
+  const navBtn =
+    'inline-flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-slate-700 transition-colors'
+
   return (
     <>
       <AppHeader showSources={showSources} setShowSources={setShowSources} />
       <main className="max-w-7xl mx-auto px-6 py-6">
-        <button
-          onClick={onBack}
-          className="text-sm text-slate-600 hover:text-slate-900 mb-4 flex items-center gap-1"
-        >
-          <span aria-hidden>←</span> Terug naar takenlijst
-        </button>
+        <div className="flex items-center justify-between gap-4 mb-4">
+          <button
+            onClick={onBack}
+            className="text-sm text-slate-600 hover:text-slate-900 flex items-center gap-1"
+          >
+            <span aria-hidden>←</span> Terug naar takenlijst
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onPrev}
+              disabled={!hasPrev}
+              className={navBtn}
+              aria-label="Vorige taak"
+              title="Vorige taak (←)"
+            >
+              <span aria-hidden>←</span>
+              <span className="hidden sm:inline">Vorige</span>
+            </button>
+            <span className="text-sm text-slate-500 tabular-nums px-1">
+              Taak {index + 1} van {total}
+            </span>
+            <button
+              type="button"
+              onClick={onNext}
+              disabled={!hasNext}
+              className={navBtn}
+              aria-label="Volgende taak"
+              title="Volgende taak (→)"
+            >
+              <span className="hidden sm:inline">Volgende</span>
+              <span aria-hidden>→</span>
+            </button>
+          </div>
+        </div>
         <div className="bg-white rounded-md border border-slate-200">
           <Detail task={task} showSources={showSources} />
         </div>
@@ -1363,7 +1508,8 @@ export default function App() {
   const containerClasses = 'min-h-screen bg-slate-100 text-slate-900'
 
   if (route.name === 'detail') {
-    const task = sorted.find((t) => t.id === route.taskId)
+    const index = sorted.findIndex((t) => t.id === route.taskId)
+    const task = index >= 0 ? sorted[index] : undefined
     if (!task) {
       // Onbekende taak-id — terug naar lijst
       navigate({ name: 'list' })
@@ -1376,6 +1522,15 @@ export default function App() {
           showSources={showSources}
           setShowSources={setShowSources}
           onBack={() => navigate({ name: 'list' })}
+          index={index}
+          total={sorted.length}
+          onPrev={() =>
+            index > 0 && navigate({ name: 'detail', taskId: sorted[index - 1].id })
+          }
+          onNext={() =>
+            index < sorted.length - 1 &&
+            navigate({ name: 'detail', taskId: sorted[index + 1].id })
+          }
         />
       </div>
     )
