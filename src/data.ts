@@ -48,6 +48,7 @@ export type Task = {
   }
   urgentie: {
     score: number
+    dagen_vervallen?: number
     reden: string
   }
   risico: {

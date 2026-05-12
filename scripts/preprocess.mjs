@@ -629,6 +629,7 @@ for (const c of taskCandidates) {
     },
     urgentie: {
       score: urgentie,
+      dagen_vervallen: c.oudste,
       reden:
         c.kind === 'grouped' && factuurCount > 1
           ? `Oudste factuur ${c.oudste}d vervallen — over ${factuurCount} posten.`
