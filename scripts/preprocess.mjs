@@ -508,7 +508,7 @@ const taskCandidates = []
 for (const [debNr, items] of overdueByDeb.entries()) {
   const totaalBedrag = items.reduce((s, x) => s + num(x.f['Balance amount']), 0)
   const oudste = items.reduce((max, x) => (x.daysOverdue > max ? x.daysOverdue : max), 0)
-  const taskType = oudste >= 60 ? 'escalatie' : 'bel_actie'
+  const taskType = 'bel_actie'
   taskCandidates.push({ kind: 'grouped', debNr, items, totaalBedrag, oudste, taskType })
 }
 
@@ -520,7 +520,7 @@ for (const { f, daysOverdue } of herinneringFacturen) {
     items: [{ f, daysOverdue }],
     totaalBedrag: num(f['Balance amount']),
     oudste: daysOverdue,
-    taskType: 'herinnering',
+    taskType: 'bel_actie',
   })
 }
 
@@ -542,6 +542,20 @@ const totalTaskCount = taskCandidates.length
 const sortedByBedragDesc = [...taskCandidates].sort((a, b) => b.totaalBedrag - a.totaalBedrag)
 const rankByCandidate = new Map()
 sortedByBedragDesc.forEach((c, idx) => rankByCandidate.set(c, idx + 1))
+
+// Bucket-info voor de visuele weergave in de UI: drempelwaardes (P20..P80),
+// tellingen per bucket, en de min/max van de hele set.
+const bucketCounts = [0, 0, 0, 0, 0]
+for (const c of taskCandidates) {
+  const score = impactBedragScore(c.totaalBedrag) // 1..5
+  bucketCounts[score - 1]++
+}
+const bedragBuckets = {
+  thresholds: [round(P20, 2), round(P40, 2), round(P60, 2), round(P80, 2)],
+  counts: bucketCounts,
+  min: round(bedragenSorted[0] || 0, 2),
+  max: round(bedragenSorted[bedragenSorted.length - 1] || 0, 2),
+}
 function impactBedragScore(amount) {
   if (amount >= P80) return 5
   if (amount >= P60) return 4
@@ -568,32 +582,22 @@ for (const c of taskCandidates) {
   const factuurCount = c.items.length
   const gerelateerdeFacturen = c.items.map((x) => x.f.Invoicenumber)
 
+  // Totaal openstaand voor deze debiteur (incl. niet-vervallen posten)
+  const debTotaalOpen = scores.totalOpen
   let omschrijving, aanleiding, factuurnummerVoorTaak
+  omschrijving =
+    debTotaalOpen > c.totaalBedrag + 0.01
+      ? `Vervallen ${formatEUR(c.totaalBedrag)} · totaal open ${formatEUR(debTotaalOpen)}`
+      : `Totaal openstaand: ${formatEUR(c.totaalBedrag)}`
   if (c.kind === 'grouped') {
-    if (c.taskType === 'escalatie') {
-      omschrijving =
-        factuurCount === 1
-          ? `Escalatie — 1 factuur ${c.oudste}d vervallen, ${formatEUR(c.totaalBedrag)}`
-          : `Escalatie — ${factuurCount} facturen, oudste ${c.oudste}d vervallen, totaal ${formatEUR(c.totaalBedrag)}`
-      aanleiding =
-        factuurCount === 1
-          ? 'Factuur >60d vervallen — escalatie vereist'
-          : `${factuurCount} facturen 14+d vervallen, oudste ${c.oudste}d`
-    } else {
-      omschrijving =
-        factuurCount === 1
-          ? `Bellen — 1 factuur ${c.oudste}d vervallen, ${formatEUR(c.totaalBedrag)}`
-          : `Bellen — ${factuurCount} facturen, oudste ${c.oudste}d vervallen, totaal ${formatEUR(c.totaalBedrag)}`
-      aanleiding =
-        factuurCount === 1
-          ? 'Eerste actieve belmoment in 14d-cyclus'
-          : `${factuurCount} facturen tussen 14–59d vervallen`
-    }
+    aanleiding =
+      factuurCount === 1
+        ? `Factuur ${c.oudste}d vervallen`
+        : `${factuurCount} facturen vervallen, oudste ${c.oudste}d`
     factuurnummerVoorTaak = undefined // niet één enkele factuur — debiteur-niveau
   } else {
     const f = c.items[0].f
-    omschrijving = `Herinnering — factuur ${c.oudste}d vervallen, ${formatEUR(c.totaalBedrag)}`
-    aanleiding = 'Standaard herinneringsmoment'
+    aanleiding = `Factuur ${c.oudste}d vervallen`
     factuurnummerVoorTaak = f.Invoicenumber
   }
 
@@ -719,6 +723,7 @@ const out = {
     debiteuren_in_set: relevantDebNrs.size,
     facturen_in_set: facturenOut.length,
     betalingen_in_set: betalingenOut.length,
+    bedrag_buckets: bedragBuckets,
     uitgesloten_categorieen: ['disputen', 'krediet'],
     uitsluitings_reden: 'Geen brondata aanwezig in Covebo-export — risicoberekening genormaliseerd over resterende categorieën (betaalgedrag 30, huidige_stand 25, omzetconcentratie 10).',
   },

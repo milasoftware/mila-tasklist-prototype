@@ -1,17 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   tasks,
-  TYPE_LABEL,
   meta,
   getDebiteur,
   getFacturen,
   getFacturenVoorDebiteur,
   type Task,
-  type TaskType,
   type Factuur,
 } from './data'
-
-type TaskFilter = 'all' | TaskType
 
 // ----- Routing (hash-based, geen library) -----------------------------------
 
@@ -103,6 +99,59 @@ function SourceLine({ children }: { children: React.ReactNode }) {
   )
 }
 
+// Visuele weergave van de 5 bedrag-buckets met markering waar deze
+// taak in valt. Toont per segment de bedragrange + aantal taken.
+function PercentilesBar({
+  activeScore,
+  taakBedrag,
+  buckets,
+}: {
+  activeScore: number
+  taakBedrag: number
+  buckets: { thresholds: number[]; counts: number[]; min: number; max: number }
+}) {
+  const ranges = [
+    `< ${fmtEUR(buckets.thresholds[0])}`,
+    `${fmtEUR(buckets.thresholds[0])} – ${fmtEUR(buckets.thresholds[1])}`,
+    `${fmtEUR(buckets.thresholds[1])} – ${fmtEUR(buckets.thresholds[2])}`,
+    `${fmtEUR(buckets.thresholds[2])} – ${fmtEUR(buckets.thresholds[3])}`,
+    `≥ ${fmtEUR(buckets.thresholds[3])}`,
+  ]
+  return (
+    <div className="mt-3 mb-1">
+      <p className="text-[11px] text-slate-500 mb-1.5">
+        Alle 445 taken in vijf even grote groepen op basis van totaalbedrag — deze taak (
+        {fmtEUR(taakBedrag)}) zit in groep {activeScore}.
+      </p>
+      <div className="grid grid-cols-5 gap-1">
+        {[1, 2, 3, 4, 5].map((seg) => {
+          const active = seg === activeScore
+          return (
+            <div
+              key={seg}
+              className={`p-2 rounded text-[10px] text-center ring-1 ${
+                active
+                  ? 'bg-slate-900 text-white ring-slate-900'
+                  : 'bg-slate-50 text-slate-500 ring-slate-200'
+              }`}
+            >
+              <div className={`font-medium ${active ? 'text-white' : 'text-slate-700'}`}>
+                Groep {seg}
+              </div>
+              <div className="mt-1 tabular-nums leading-tight">{ranges[seg - 1]}</div>
+              <div
+                className={`mt-1 tabular-nums ${active ? 'text-white/80' : 'text-slate-400'}`}
+              >
+                {buckets.counts[seg - 1]} taken
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function ConfidencePill({ value }: { value: 'hoog' | 'middel' | 'geen' }) {
   const tone =
     value === 'hoog'
@@ -123,23 +172,106 @@ function priorityHint(p: number): string {
   return 'Routine — geen haast'
 }
 
-// Plain-language voor effect-type. Vervangt de korte enum-waardes door
-// een mensvriendelijke beschrijving.
-function effectPlain(t: string): string {
-  switch (t) {
-    case 'directe_cash':
-      return 'direct geld binnen als de klant betaalt'
-    case 'versnelling':
-      return 'een eerdere betaling dan normaal'
-    case 'bescherming':
-      return 'voorkomt een verlies, geen directe cash'
-    case 'monitoring':
-      return 'observatie — geen directe opbrengst'
-    case 'administratief':
-      return 'datakwaliteit — geen directe opbrengst'
-    default:
-      return t
+// Cirkelvormige priority-indicator met hover-tooltip die de opbouw toont.
+function PriorityRing({ task }: { task: Task }) {
+  const score = task.priority
+  const max = 5
+  const size = 96
+  const stroke = 10
+  const radius = (size - stroke) / 2
+  const circumference = 2 * Math.PI * radius
+  const fraction = Math.max(0, Math.min(1, score / max))
+  const offset = circumference * (1 - fraction)
+
+  // Stroke-kleur in lijn met priorityTone-schema
+  const strokeColorClass =
+    score >= 4
+      ? 'text-red-500'
+      : score >= 3
+        ? 'text-orange-500'
+        : score >= 2
+          ? 'text-amber-400'
+          : 'text-slate-400'
+
+  const calc = {
+    impact: task.impact.score * WEIGHTS.impact,
+    urgentie: task.urgentie.score * WEIGHTS.urgentie,
+    risico: task.risico.score * WEIGHTS.risico,
+    potentieel: task.potentieel.score * WEIGHTS.potentieel,
   }
+
+  const rows: { label: string; score: number; pct: number; bijdrage: number }[] = [
+    { label: 'Hoeveel levert dit op', score: task.impact.score, pct: 40, bijdrage: calc.impact },
+    { label: 'Hoe dringend', score: task.urgentie.score, pct: 30, bijdrage: calc.urgentie },
+    { label: 'Hoe risicovol', score: task.risico.score, pct: 20, bijdrage: calc.risico },
+    { label: 'Hoeveel sneller mogelijk', score: task.potentieel.score, pct: 10, bijdrage: calc.potentieel },
+  ]
+
+  return (
+    <div className="group relative inline-block">
+      <div className="relative" style={{ width: size, height: size }}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="rgb(241 245 249)"
+            strokeWidth={stroke}
+          />
+          <circle
+            className={strokeColorClass}
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={stroke}
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            strokeLinecap="round"
+            transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          />
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-2xl font-semibold text-slate-900 tabular-nums leading-none">
+            {fmtNL(score, 2)}
+          </span>
+          <span className="text-[10px] text-slate-400 mt-0.5">van 5</span>
+        </div>
+      </div>
+      <p className="text-[11px] text-slate-500 uppercase tracking-wide text-center mt-1">
+        Priority
+      </p>
+
+      {/* Hover tooltip met opbouw van de score */}
+      <div
+        className="absolute left-1/2 -translate-x-1/2 top-full mt-3 hidden group-hover:block z-20 bg-slate-900 text-white rounded-md p-3 text-xs shadow-xl pointer-events-none"
+        style={{ width: 320 }}
+      >
+        <p className="font-medium mb-2 text-white/90">Opbouw van de priority</p>
+        <table className="w-full tabular-nums">
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.label}>
+                <td className="text-white/80 pr-2 py-0.5">{r.label}</td>
+                <td className="text-white/60 text-right whitespace-nowrap px-2">
+                  {fmtNL(r.score, r.score % 1 === 0 ? 0 : 1)} × {r.pct}%
+                </td>
+                <td className="text-right whitespace-nowrap pl-2">{fmtNL(r.bijdrage, 2)}</td>
+              </tr>
+            ))}
+            <tr className="border-t border-white/20">
+              <td className="font-medium pt-1.5">Totaal</td>
+              <td></td>
+              <td className="font-semibold text-right pt-1.5">{fmtNL(score, 2)}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p className="text-[10px] text-white/60 mt-2">{priorityHint(score)}</p>
+      </div>
+    </div>
+  )
 }
 
 // Plain-language voor de Mann-Kendall trend-uitkomst. Toont alleen de
@@ -251,9 +383,6 @@ function TaskRow({ task, selected, onClick }: { task: Task; selected: boolean; o
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
             <h3 className="font-medium text-slate-900 truncate">{task.debiteur}</h3>
-            <span className="text-xs text-slate-500 uppercase tracking-wide shrink-0">
-              {TYPE_LABEL[task.type]}
-            </span>
             {factuurCount > 1 && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 tabular-nums shrink-0">
                 {factuurCount} facturen
@@ -331,7 +460,9 @@ function FactuurTable({
                   </span>
                 </td>
                 <td className="py-1.5 tabular-nums text-right">
-                  {overdue !== null && overdue > 0 ? (
+                  {overdue !== null && overdue >= 14 ? (
+                    <span className="text-red-700 font-medium">+{overdue}d</span>
+                  ) : overdue !== null && overdue > 0 ? (
                     <span className="text-amber-700">+{overdue}d</span>
                   ) : overdue !== null && overdue <= 0 ? (
                     <span className="text-slate-400">{overdue}d</span>
@@ -371,9 +502,8 @@ function DebtorContext({ task, showSources }: { task: Task; showSources: boolean
 
   return (
     <section className="border border-slate-200 rounded-md p-4">
-      <div className="flex items-baseline justify-between mb-3">
+      <div className="mb-3">
         <h4 className="font-medium text-slate-900">Debiteur-context</h4>
-        <span className="text-xs text-slate-500">{deb?.plaats ?? task.debiteurnummer}</span>
       </div>
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mb-4">
@@ -396,6 +526,19 @@ function DebtorContext({ task, showSources }: { task: Task; showSources: boolean
         <dd className="text-slate-700 tabular-nums">
           {all.length} facturen, {all.filter((f) => f.status === 'betaald').length} betaald
         </dd>
+        {task.risico.betaalgedrag_breakdown &&
+          task.risico.betaalgedrag_breakdown.dso.invoice_count > 0 && (
+            <>
+              <dt className="text-slate-500">DSO na vervaldatum</dt>
+              <dd className="text-slate-700 tabular-nums">
+                {task.risico.betaalgedrag_breakdown.dso.avg_days_late}d gemiddeld
+                <span className="text-slate-400">
+                  {' '}
+                  · over {task.risico.betaalgedrag_breakdown.dso.invoice_count} betaalde facturen
+                </span>
+              </dd>
+            </>
+          )}
       </dl>
 
       {taakFacturen.length > 0 && (
@@ -474,21 +617,13 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
 
   return (
     <div className="p-6 space-y-5">
-      <header>
-        <p className="text-xs text-slate-500 uppercase tracking-wide">{TYPE_LABEL[task.type]}</p>
-        <h2 className="text-xl font-semibold text-slate-900 mt-1">{task.debiteur}</h2>
-        <p className="text-slate-700 mt-1">{task.taakomschrijving}</p>
-        <p className="text-sm text-slate-500 mt-2">{task.aanleiding}</p>
-      </header>
-
-      <div className={`rounded-md ring-1 p-4 ${priorityTone(task.priority)}`}>
-        <div className="flex items-baseline gap-3">
-          <span className="text-3xl font-semibold tabular-nums">{fmtNL(task.priority, 2)}</span>
-          <span className="text-sm">van 5 — {priorityHint(task.priority)}</span>
-        </div>
-        <p className="text-xs mt-1 opacity-80">
-          Mila scoort elke taak op vier punten. Hieronder zie je hoe deze taak op elk punt scoort.
-        </p>
+      <div className="flex items-start gap-6">
+        <header className="flex-1 min-w-0">
+          <h2 className="text-xl font-semibold text-slate-900">{task.debiteur}</h2>
+          <p className="text-slate-700 mt-1">{task.taakomschrijving}</p>
+          <p className="text-sm text-slate-500 mt-2">{task.aanleiding}</p>
+        </header>
+        <PriorityRing task={task} />
       </div>
 
       <DebtorContext task={task} showSources={showSources} />
@@ -517,18 +652,19 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
             )}
           </p>
         )}
-        <p>
-          <span className="text-slate-500">Wat het oplevert: </span>
-          {effectPlain(task.impact.effect_type)}
-        </p>
+        {task.impact.bedrag !== undefined && (
+          <PercentilesBar
+            activeScore={task.impact.bedrag_score}
+            taakBedrag={task.impact.bedrag}
+            buckets={meta.bedrag_buckets}
+          />
+        )}
         {showSources && (
           <>
             <ScoreRow label="Score voor bedrag" score={task.impact.bedrag_score} />
-            <ScoreRow label="Score voor type" score={task.impact.effect_score} max={2} />
             <p className="text-slate-500 text-xs pt-1">{task.impact.explanation}</p>
             <SourceLine>
-              factuur.openstaand_bedrag (deze taak), SUM(factuur.openstaand_bedrag) over open AR,
-              effect-classificatie op taak.type + factuur-context
+              factuur.openstaand_bedrag (deze taak), SUM(factuur.openstaand_bedrag) over open AR
             </SourceLine>
           </>
         )}
@@ -789,86 +925,34 @@ function AppHeader({
 
 function ListView({
   sorted,
-  filter,
-  setFilter,
   showSources,
   setShowSources,
   onSelectTask,
 }: {
   sorted: Task[]
-  filter: TaskFilter
-  setFilter: (f: TaskFilter) => void
   showSources: boolean
   setShowSources: (b: boolean) => void
   onSelectTask: (id: string) => void
 }) {
-  const counts: Record<string, number> = { all: sorted.length }
-  for (const t of sorted) counts[t.type] = (counts[t.type] ?? 0) + 1
-  const tabs: { value: TaskFilter; label: string }[] = [
-    { value: 'all', label: 'Alle' },
-    ...Object.keys(counts)
-      .filter((k) => k !== 'all')
-      .sort((a, b) => counts[b] - counts[a])
-      .map((k) => ({ value: k as TaskType, label: TYPE_LABEL[k as TaskType] })),
-  ]
-  const visible = filter === 'all' ? sorted : sorted.filter((t) => t.type === filter)
-
   return (
     <>
       <AppHeader
         showSources={showSources}
         setShowSources={setShowSources}
         rightSlot={
-          <p className="text-sm text-slate-500 tabular-nums">
-            {sorted.length === meta.total_taken_gegenereerd
-              ? `${sorted.length} taken`
-              : `top ${sorted.length} van ${meta.total_taken_gegenereerd} taken`}
-          </p>
+          <p className="text-sm text-slate-500 tabular-nums">{sorted.length} taken</p>
         }
       />
       <main className="max-w-5xl mx-auto px-6 py-6">
         <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
-          <nav className="flex border-b border-slate-200 bg-slate-50/50">
-            {tabs.map((tab) => {
-              const active = filter === tab.value
-              const count = counts[tab.value] ?? 0
-              return (
-                <button
-                  key={tab.value}
-                  onClick={() => setFilter(tab.value)}
-                  className={`relative px-4 py-2.5 text-sm transition-colors ${
-                    active ? 'text-slate-900 font-medium' : 'text-slate-500 hover:text-slate-700'
-                  }`}
-                >
-                  {tab.label}
-                  <span
-                    className={`ml-1.5 text-[11px] tabular-nums px-1.5 py-0.5 rounded ${
-                      active ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-600'
-                    }`}
-                  >
-                    {count}
-                  </span>
-                  {active && (
-                    <span className="absolute bottom-0 left-2 right-2 h-0.5 bg-slate-900 rounded-t" />
-                  )}
-                </button>
-              )
-            })}
-          </nav>
-          {visible.length === 0 ? (
-            <p className="px-4 py-8 text-sm text-slate-500 text-center">
-              Geen taken in deze categorie.
-            </p>
-          ) : (
-            visible.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                selected={false}
-                onClick={() => onSelectTask(task.id)}
-              />
-            ))
-          )}
+          {sorted.map((task) => (
+            <TaskRow
+              key={task.id}
+              task={task}
+              selected={false}
+              onClick={() => onSelectTask(task.id)}
+            />
+          ))}
         </div>
       </main>
     </>
@@ -907,7 +991,6 @@ function DetailView({
 export default function App() {
   const sorted = [...tasks].sort((a, b) => b.priority - a.priority)
   const [showSources, setShowSources] = useState(false)
-  const [filter, setFilter] = useState<TaskFilter>('all')
   const [route, navigate] = useHashRoute()
 
   // Scroll naar top bij elke route-wissel
@@ -940,8 +1023,6 @@ export default function App() {
     <div className={containerClasses}>
       <ListView
         sorted={sorted}
-        filter={filter}
-        setFilter={setFilter}
         showSources={showSources}
         setShowSources={setShowSources}
         onSelectTask={(id) => navigate({ name: 'detail', taskId: id })}

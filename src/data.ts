@@ -142,6 +142,12 @@ export type Meta = {
   betalingen_in_set: number
   uitgesloten_categorieen: string[]
   uitsluitings_reden: string
+  bedrag_buckets: {
+    thresholds: number[] // [P20, P40, P60, P80]
+    counts: number[] // 5 items: aantal taken per score-bucket
+    min: number
+    max: number
+  }
 }
 
 export const TYPE_LABEL: Record<TaskType, string> = {
