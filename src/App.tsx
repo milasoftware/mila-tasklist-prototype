@@ -1243,6 +1243,12 @@ function DebtorStatsBar({ task, showSources }: { task: Task; showSources: boolea
   if (deb?.accountmanager) {
     stats.push({ label: 'Accountmanager', value: deb.accountmanager })
   }
+  if (deb?.betaaltermijn) {
+    stats.push({
+      label: 'Betaaltermijn',
+      value: <span className="tabular-nums">{deb.betaaltermijn} dagen</span>,
+    })
+  }
   stats.push({
     label: 'Open posten',
     value: (
@@ -1283,7 +1289,7 @@ function DebtorStatsBar({ task, showSources }: { task: Task; showSources: boolea
   return (
     <section className="border border-slate-200 rounded-md p-4">
       <h4 className="font-medium text-slate-900 mb-3">Debiteur-context</h4>
-      <dl className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      <dl className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {stats.map((s) => (
           <div key={s.label}>
             <dt className="text-xs text-slate-500 uppercase tracking-wide">{s.label}</dt>
@@ -1293,8 +1299,8 @@ function DebtorStatsBar({ task, showSources }: { task: Task; showSources: boolea
       </dl>
       {showSources && (
         <SourceLine>
-          debiteur.* (NAW + accountmanager), factuur (alle posten), betaling (gekoppeld via
-          factuurnummer)
+          debiteur.* (NAW + accountmanager + betaaltermijn), factuur (alle posten), betaling
+          (gekoppeld via factuurnummer)
         </SourceLine>
       )}
     </section>

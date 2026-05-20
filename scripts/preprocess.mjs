@@ -677,6 +677,15 @@ console.log(`Taken gegenereerd: ${tasks.length}, ${selectionLabel} geselecteerd 
 
 const relevantDebNrs = new Set(topTasks.map((t) => t.debiteurnummer))
 
+// Betaaltermijn niet in bron — deterministisch toegekend (30 of 45 dagen)
+// op basis van debiteurnummer-hash, zodat dezelfde debiteur na regeneratie
+// dezelfde termijn houdt.
+const assignBetaaltermijn = (nr) => {
+  let h = 0
+  for (let i = 0; i < nr.length; i++) h = (h * 31 + nr.charCodeAt(i)) | 0
+  return Math.abs(h) % 2 === 0 ? 30 : 45
+}
+
 const debiteuren = []
 for (const nr of relevantDebNrs) {
   const d = debByNr.get(nr)
@@ -687,6 +696,7 @@ for (const nr of relevantDebNrs) {
     plaats: d.City,
     accountmanager: d.Accountmanager,
     klanttype: d.CustomerType,
+    betaaltermijn: assignBetaaltermijn(nr),
   })
 }
 

@@ -112,6 +112,9 @@ export type Debiteur = {
   plaats?: string
   accountmanager?: string
   klanttype?: string
+  // Afgesproken betaaltermijn in dagen (30 of 45). Niet aanwezig in bron —
+  // deterministisch toegekend per debiteur in preprocess.
+  betaaltermijn: 30 | 45
 }
 
 export type Factuur = {
