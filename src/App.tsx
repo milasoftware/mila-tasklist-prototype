@@ -917,7 +917,7 @@ function tooltipRisico(task: Task): React.ReactNode {
             </tr>
             <tr>
               <td className="pr-2 py-0.5">Huidige stand</td>
-              <td className="text-right pr-1">{fmtNL(hs, 0)}</td>
+              <td className="text-right pr-1">{fmtNL(hs, 1)}</td>
               <td className="text-white/50 pl-1">× 25/65</td>
             </tr>
             <tr>
@@ -1014,23 +1014,95 @@ function tooltipHuidigeStand(
   score: number,
   pctVervallen: number | undefined,
   oudsteDagen: number | undefined,
+  pctScore: number | undefined,
+  oudsteScore: number | undefined,
 ): React.ReactNode {
+  const pctSchaal = [
+    { score: 0, label: '0% (niets vervallen)' },
+    { score: 1, label: '1 – 10%' },
+    { score: 2, label: '11 – 25%' },
+    { score: 3, label: '26 – 50%' },
+    { score: 4, label: '51 – 75%' },
+    { score: 5, label: '> 75%' },
+  ]
+  const oudsteSchaal = [
+    { score: 0, label: 'niet vervallen' },
+    { score: 1, label: '1 – 15 dagen' },
+    { score: 2, label: '16 – 30 dagen' },
+    { score: 3, label: '31 – 60 dagen' },
+    { score: 4, label: '61 – 90 dagen' },
+    { score: 5, label: '> 90 dagen' },
+  ]
   return (
     <ScoreTooltip
       title="Hoe staan we er nu voor"
-      description="Aandeel van het openstaande bedrag bij deze klant dat al vervallen is."
-      thresholds={[
-        { score: 1, label: '< 5% vervallen' },
-        { score: 2, label: '5 – 25% vervallen' },
-        { score: 3, label: '25 – 50% vervallen' },
-        { score: 4, label: '50 – 75% vervallen' },
-        { score: 5, label: '≥ 75% vervallen' },
-      ]}
-      activeScore={score}
-      current={
-        pctVervallen !== undefined
-          ? `${Math.round(pctVervallen)}% vervallen${oudsteDagen ? ` · oudste post ${oudsteDagen}d` : ''} → score ${score}`
-          : undefined
+      description="Gemiddelde van twee parameters: % vervallen (hoe groot het probleem nu is) + leeftijd oudste post (hoe lang het al sleept)."
+      composition={
+        <div className="space-y-3 mb-2">
+          <table className="w-full text-[11px] tabular-nums">
+            <tbody className="text-white/80">
+              <tr>
+                <td className="pr-2 py-0.5">% vervallen</td>
+                <td className="text-right pr-1">
+                  {pctVervallen !== undefined ? `${Math.round(pctVervallen)}%` : '—'}
+                </td>
+                <td className="text-white/50 pl-2 text-right">
+                  → score {pctScore ?? '—'}
+                </td>
+              </tr>
+              <tr>
+                <td className="pr-2 py-0.5">Oudste post</td>
+                <td className="text-right pr-1">
+                  {oudsteDagen !== undefined ? `${oudsteDagen}d` : '—'}
+                </td>
+                <td className="text-white/50 pl-2 text-right">
+                  → score {oudsteScore ?? '—'}
+                </td>
+              </tr>
+              <tr className="border-t border-white/20">
+                <td className="font-medium pt-1">Huidige stand</td>
+                <td className="text-right font-semibold pt-1 pr-1">{fmtNL(score, 1)}</td>
+                <td className="text-white/50 pl-2 text-right pt-1">(gemiddelde)</td>
+              </tr>
+            </tbody>
+          </table>
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-white/50 mb-1">
+              Schaal % vervallen
+            </p>
+            <table className="w-full text-[11px]">
+              <tbody>
+                {pctSchaal.map((t) => {
+                  const active = t.score === pctScore
+                  return (
+                    <tr key={t.score} className={active ? 'text-white' : 'text-white/60'}>
+                      <td className="pr-2 py-0.5 w-5 tabular-nums">{t.score}</td>
+                      <td className={`py-0.5 ${active ? 'font-medium' : ''}`}>{t.label}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-white/50 mb-1">
+              Schaal leeftijd oudste post
+            </p>
+            <table className="w-full text-[11px]">
+              <tbody>
+                {oudsteSchaal.map((t) => {
+                  const active = t.score === oudsteScore
+                  return (
+                    <tr key={t.score} className={active ? 'text-white' : 'text-white/60'}>
+                      <td className="pr-2 py-0.5 w-5 tabular-nums">{t.score}</td>
+                      <td className={`py-0.5 ${active ? 'font-medium' : ''}`}>{t.label}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
       }
     />
   )
@@ -1642,6 +1714,8 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
               task.risico.huidige_stand,
               task.risico.huidige_stand_pct_vervallen,
               task.risico.huidige_stand_oudste_dagen,
+              task.risico.huidige_stand_pct_score,
+              task.risico.huidige_stand_oudste_score,
             )}
             caption={
               task.risico.huidige_stand_pct_vervallen !== undefined

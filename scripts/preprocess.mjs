@@ -388,7 +388,9 @@ function debiteurScores(debNr) {
   if (volatiliteitScore !== null) subScores.push(volatiliteitScore)
   const betaalgedrag = subScores.reduce((a, b) => a + b, 0) / subScores.length
 
-  // Huidige stand — % vervallen van totaal open voor deze debiteur, plus oudste post
+  // Huidige stand — gemiddelde van twee sub-scores volgens risicoscore-spec:
+  //   1. % vervallen (hoe groot is het probleem nu)
+  //   2. Leeftijd oudste post (hoe lang sleept het al)
   const totalOpen = e.openFacturen.reduce((s, f) => s + num(f['Balance amount']), 0)
   const overdue = e.openFacturen.filter((f) => f.Duedate && new Date(f.Duedate) < today)
   const overdueSum = overdue.reduce((s, f) => s + num(f['Balance amount']), 0)
@@ -398,12 +400,27 @@ function debiteurScores(debNr) {
     const d = daysBetween(today, f.Duedate)
     if (d > oldestDays) oldestDays = d
   }
-  let huidigeStand
-  if (pctOverdue < 0.05) huidigeStand = 1
-  else if (pctOverdue < 0.25) huidigeStand = 2
-  else if (pctOverdue < 0.5) huidigeStand = 3
-  else if (pctOverdue < 0.75) huidigeStand = 4
-  else huidigeStand = 5
+
+  // Sub-score 1: % vervallen → 0-5
+  const pctOverduePerc = pctOverdue * 100
+  let pctOverdueScore
+  if (pctOverduePerc === 0) pctOverdueScore = 0
+  else if (pctOverduePerc <= 10) pctOverdueScore = 1
+  else if (pctOverduePerc <= 25) pctOverdueScore = 2
+  else if (pctOverduePerc <= 50) pctOverdueScore = 3
+  else if (pctOverduePerc <= 75) pctOverdueScore = 4
+  else pctOverdueScore = 5
+
+  // Sub-score 2: leeftijd oudste post → 0-5
+  let oldestDaysScore
+  if (oldestDays === 0) oldestDaysScore = 0
+  else if (oldestDays <= 15) oldestDaysScore = 1
+  else if (oldestDays <= 30) oldestDaysScore = 2
+  else if (oldestDays <= 60) oldestDaysScore = 3
+  else if (oldestDays <= 90) oldestDaysScore = 4
+  else oldestDaysScore = 5
+
+  const huidigeStand = (pctOverdueScore + oldestDaysScore) / 2
 
   // Omzetconcentratie — debiteur-aandeel in jaar-omzet
   const debiteurOmzet = e.facturen.reduce((s, f) => s + Math.max(0, num(f['Invoice amount'])), 0)
@@ -450,7 +467,9 @@ function debiteurScores(debNr) {
 
   return {
     betaalgedrag: round(betaalgedrag, 2),
-    huidigeStand,
+    huidigeStand: round(huidigeStand, 2),
+    huidigeStandPctScore: pctOverdueScore,
+    huidigeStandOudsteScore: oldestDaysScore,
     omzetconcentratie,
     disputen: null,
     krediet: null,
@@ -669,7 +688,9 @@ for (const c of taskCandidates) {
       betaalgedrag: scores.betaalgedrag,
       huidige_stand: scores.huidigeStand,
       huidige_stand_pct_vervallen: scores.pctOverdue,
+      huidige_stand_pct_score: scores.huidigeStandPctScore,
       huidige_stand_oudste_dagen: scores.oldestDays,
+      huidige_stand_oudste_score: scores.huidigeStandOudsteScore,
       disputen: null,
       krediet: null,
       omzetconcentratie: scores.omzetconcentratie,

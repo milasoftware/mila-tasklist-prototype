@@ -56,7 +56,9 @@ export type Task = {
     betaalgedrag: number
     huidige_stand: number
     huidige_stand_pct_vervallen?: number
+    huidige_stand_pct_score?: number
     huidige_stand_oudste_dagen?: number
+    huidige_stand_oudste_score?: number
     disputen: number | null
     krediet: number | null
     omzetconcentratie: number
