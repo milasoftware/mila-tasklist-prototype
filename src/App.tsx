@@ -6,8 +6,10 @@ import {
   getDebiteur,
   getFacturen,
   getFacturenVoorDebiteur,
+  getLosseBetalingenVoorDebiteur,
   type Task,
   type Factuur,
+  type LosseBetaling,
   type Confidence,
 } from './data'
 
@@ -1306,6 +1308,61 @@ function FactuurCard({
   )
 }
 
+function LosseBetalingTable({ betalingen }: { betalingen: LosseBetaling[] }) {
+  const sorted = [...betalingen].sort((a, b) => b.datum.localeCompare(a.datum))
+  if (sorted.length === 0) {
+    return <p className="text-sm text-slate-500 italic">Geen betalingen om te tonen.</p>
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-slate-500 border-b border-slate-200">
+            <th className="py-1.5 pr-2 font-medium">ID</th>
+            <th className="py-1.5 pr-2 font-medium">Datum</th>
+            <th className="py-1.5 font-medium text-right">Bedrag</th>
+          </tr>
+        </thead>
+        <tbody className="text-slate-700">
+          {sorted.map((b) => (
+            <tr key={b.id} className="border-b border-slate-50 last:border-0">
+              <td className="py-1.5 pr-2 font-mono tabular-nums">{b.id}</td>
+              <td className="py-1.5 pr-2 tabular-nums text-slate-500">{b.datum}</td>
+              <td
+                className={`py-1.5 tabular-nums text-right ${b.bedrag < 0 ? 'text-red-700' : ''}`}
+              >
+                {fmtEUR(b.bedrag)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function LosseBetalingCard({
+  title,
+  subtitle,
+  betalingen,
+}: {
+  title: string
+  subtitle?: React.ReactNode
+  betalingen: LosseBetaling[]
+}) {
+  return (
+    <section className="border border-slate-200 rounded-md p-4">
+      <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+        {title} ({betalingen.length})
+      </p>
+      {subtitle && (
+        <p className="text-xs text-slate-500 mb-3 leading-relaxed">{subtitle}</p>
+      )}
+      <LosseBetalingTable betalingen={betalingen} />
+    </section>
+  )
+}
+
 function ComponentBlock({
   title,
   score,
@@ -1345,6 +1402,10 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
   const taakIds = data?.taakIds
   const allOpen = data?.open ?? []
   const showAlleOpenPosten = allOpen.length > taakFacturen.length
+  const alleFacturenDebiteur = data?.all ?? []
+  const alleBetalingenDebiteur = task.debiteurnummer
+    ? getLosseBetalingenVoorDebiteur(task.debiteurnummer)
+    : []
 
   return (
     <div className="p-6 space-y-5">
@@ -1694,6 +1755,23 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           </ul>
         </section>
       </div>
+
+      {/* Volledige debiteur-historie: alle facturen + alle betalingen */}
+      {(alleFacturenDebiteur.length > 0 || alleBetalingenDebiteur.length > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <FactuurCard
+            title="Alle facturen van deze debiteur"
+            subtitle="Volledige factuurhistorie (open en betaald). Alleen records van het type 'Factuur'."
+            facturen={alleFacturenDebiteur}
+            highlightIds={taakIds}
+          />
+          <LosseBetalingCard
+            title="Alle betalingen van deze debiteur"
+            subtitle="Losse betaalboekingen (documenttype Betaling, Terugbetaling of leeg). Negatieve bedragen zijn terugbetalingen."
+            betalingen={alleBetalingenDebiteur}
+          />
+        </div>
+      )}
     </div>
   )
 }

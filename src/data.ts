@@ -132,6 +132,16 @@ export type Betaling = {
   bedrag: number
 }
 
+// Losse betaalboekingen — bronrecords met Invoicetype/Documenttype ≠ Factuur
+// (Betaling, Terugbetaling of leeg). Niet gekoppeld aan een specifieke factuur.
+export type LosseBetaling = {
+  id: string
+  debiteurnummer: string
+  datum: string
+  bedrag: number
+  documenttype: 'Betaling' | 'Terugbetaling' | ''
+}
+
 export type Meta = {
   snapshot_datum: string
   bron: string
@@ -177,6 +187,8 @@ export const tasks: Task[] = generated.tasks as Task[]
 export const debiteuren: Debiteur[] = generated.debiteuren as Debiteur[]
 export const facturen: Factuur[] = generated.facturen as Factuur[]
 export const betalingen: Betaling[] = generated.betalingen as Betaling[]
+export const losseBetalingen: LosseBetaling[] = (generated as { losseBetalingen?: LosseBetaling[] })
+  .losseBetalingen ?? []
 export const meta: Meta = generated.meta as Meta
 
 // Lookup-helpers — gebruikt door UI voor het renderen van debiteur-historie
@@ -189,9 +201,26 @@ for (const f of facturen) {
   facturenByDebiteur.get(f.debiteurnummer)!.push(f)
 }
 
+const betalingenByDebiteur = new Map<string, Betaling[]>()
+for (const b of betalingen) {
+  if (!betalingenByDebiteur.has(b.debiteurnummer)) betalingenByDebiteur.set(b.debiteurnummer, [])
+  betalingenByDebiteur.get(b.debiteurnummer)!.push(b)
+}
+
+const losseBetalingenByDebiteur = new Map<string, LosseBetaling[]>()
+for (const b of losseBetalingen) {
+  if (!losseBetalingenByDebiteur.has(b.debiteurnummer))
+    losseBetalingenByDebiteur.set(b.debiteurnummer, [])
+  losseBetalingenByDebiteur.get(b.debiteurnummer)!.push(b)
+}
+
 export const getDebiteur = (id: string): Debiteur | undefined => debiteurById.get(id)
 export const getFactuur = (id: string): Factuur | undefined => factuurById.get(id)
 export const getFacturen = (ids: string[]): Factuur[] =>
   ids.map((id) => factuurById.get(id)).filter((f): f is Factuur => f !== undefined)
 export const getFacturenVoorDebiteur = (debiteurnummer: string): Factuur[] =>
   facturenByDebiteur.get(debiteurnummer) ?? []
+export const getBetalingenVoorDebiteur = (debiteurnummer: string): Betaling[] =>
+  betalingenByDebiteur.get(debiteurnummer) ?? []
+export const getLosseBetalingenVoorDebiteur = (debiteurnummer: string): LosseBetaling[] =>
+  losseBetalingenByDebiteur.get(debiteurnummer) ?? []

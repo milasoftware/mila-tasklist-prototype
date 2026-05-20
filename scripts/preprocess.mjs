@@ -712,6 +712,26 @@ for (const nr of relevantDebNrs) {
   }
 }
 
+// Losse boekstukken: records met Invoicetype/Documenttype !== 'Factuur'
+// (Betaling, Terugbetaling, of leeg ""). Dit zijn standalone betaalboekingen
+// die niet zijn gematcht aan een factuur. Voor de detailweergave per debiteur.
+const losseBetalingenOut = []
+for (const i of postsData.invoices) {
+  const docType = i['Invoicetype/Documenttype']
+  if (docType === 'Factuur') continue
+  const nr = i.Debtornumber
+  if (!relevantDebNrs.has(nr)) continue
+  for (const p of i.payments || []) {
+    losseBetalingenOut.push({
+      id: p.id,
+      debiteurnummer: nr,
+      datum: p.date,
+      bedrag: num(p.amount),
+      documenttype: docType || '',
+    })
+  }
+}
+
 // ----- output ----------------------------------------------------------------
 
 const out = {
@@ -728,6 +748,7 @@ const out = {
     debiteuren_in_set: relevantDebNrs.size,
     facturen_in_set: facturenOut.length,
     betalingen_in_set: betalingenOut.length,
+    losse_betalingen_in_set: losseBetalingenOut.length,
     bedrag_buckets: bedragBuckets,
     uitgesloten_categorieen: ['disputen', 'krediet'],
     uitsluitings_reden: 'Geen brondata aanwezig in Covebo-export — risicoberekening genormaliseerd over resterende categorieën (betaalgedrag 30, huidige_stand 25, omzetconcentratie 10).',
@@ -736,9 +757,10 @@ const out = {
   debiteuren,
   facturen: facturenOut,
   betalingen: betalingenOut,
+  losseBetalingen: losseBetalingenOut,
 }
 
 fs.writeFileSync(OUT_FILE, JSON.stringify(out, null, 2))
 const sizeKB = Math.round(fs.statSync(OUT_FILE).size / 1024)
 console.log(`\nGeschreven naar src/data.generated.json (${sizeKB} KB)`)
-console.log(`  ${topTasks.length} taken, ${debiteuren.length} debiteuren, ${facturenOut.length} facturen, ${betalingenOut.length} betalingen`)
+console.log(`  ${topTasks.length} taken, ${debiteuren.length} debiteuren, ${facturenOut.length} facturen, ${betalingenOut.length} betalingen, ${losseBetalingenOut.length} losse boekstukken`)
