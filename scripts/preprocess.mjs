@@ -24,11 +24,12 @@ const OUT_FILE = path.join(REPO, 'src/data.generated.json')
 const SNAPSHOT = '2026-05-11' // laatste factuurdatum in de dataset
 const TOP_N = Infinity // alle gegenereerde taken meenemen
 
-// Tijdvenster voor de DSO-mediaan ("hoeveel dagen meestal te laat").
-// Aligneert met de rest van de AI-componenten die op ~12 maanden historie
-// werken en zorgt dat een verbeterende debiteur niet eeuwig blijft hangen
-// op oud betaalgedrag.
-const DSO_WINDOW_DAYS = 365
+// Tijdvenster voor de recent-betaalgedrag-metingen (DSO-mediaan +
+// voorspelbaarheid/volatiliteit). Aligneert met de rest van de AI-componenten
+// die op ~12 maanden historie werken en zorgt dat een verbeterende debiteur
+// niet eeuwig blijft hangen op oud betaalgedrag. Trend (Mann-Kendall) gebruikt
+// bewust wel de volledige historie omdat een trendsignaal lengte nodig heeft.
+const BETAALGEDRAG_WINDOW_DAYS = 365
 
 // ----- helpers ---------------------------------------------------------------
 
@@ -196,8 +197,12 @@ function collectPaymentDates(facturenList) {
 
 // Berekent intervallen tussen opeenvolgende unieke betaaldata (in dagen).
 // Dedupliceert eerst, want deelbetalingen op dezelfde dag zijn één betaalmoment.
-function paymentIntervals(facturenList) {
-  const dates = [...new Set(collectPaymentDates(facturenList))].sort()
+// Optioneel filter sinceMs (ms-epoch) houdt alleen betaaldata vanaf die datum.
+function paymentIntervals(facturenList, sinceMs = null) {
+  let dates = [...new Set(collectPaymentDates(facturenList))].sort()
+  if (sinceMs !== null) {
+    dates = dates.filter((d) => new Date(d).getTime() >= sinceMs)
+  }
   const intervals = []
   for (let i = 1; i < dates.length; i++) intervals.push(daysBetween(dates[i], dates[i - 1]))
   return intervals
@@ -271,12 +276,13 @@ function debiteurScores(debNr) {
   const paid = e.facturen.filter(
     (f) => f.payments && f.payments.length > 0 && num(f['Balance amount']) === 0 && f.Duedate,
   )
-  const dsoWindowStartMs = new Date(SNAPSHOT).getTime() - DSO_WINDOW_DAYS * 86400000
+  const recentWindowStartMs =
+    new Date(SNAPSHOT).getTime() - BETAALGEDRAG_WINDOW_DAYS * 86400000
   const dsoVals = []
   for (const f of paid) {
     const lastPay = f.payments.reduce((max, p) => (p.date > max ? p.date : max), '')
     if (!lastPay) continue
-    if (new Date(lastPay).getTime() < dsoWindowStartMs) continue
+    if (new Date(lastPay).getTime() < recentWindowStartMs) continue
     dsoVals.push(daysBetween(lastPay, f.Duedate))
   }
   // Mediaan i.p.v. gemiddelde: robuuster tegen uitschieters (één factuur die
@@ -334,7 +340,10 @@ function debiteurScores(debNr) {
   }
 
   // ---- AI-sub-parameter: volatiliteit (CV op betaalintervallen) -----------
-  const intervals = paymentIntervals(e.facturen)
+  // Beperkt tot de afgelopen 12 maanden, identiek aan de DSO-mediaan: een
+  // debiteur die zijn gedrag heeft veranderd mag dat ook terugzien in de
+  // score. De VolatilityDotStrip-visualisatie toont dezelfde periode.
+  const intervals = paymentIntervals(e.facturen, recentWindowStartMs)
   const cv = coefficientOfVariation(intervals)
   let volatiliteitConfidence
   if (intervals.length >= 10) volatiliteitConfidence = 'hoog'
@@ -345,7 +354,7 @@ function debiteurScores(debNr) {
     volatiliteitLabel = 'onbekend',
     volatiliteitExplanation = ''
   if (volatiliteitConfidence === 'geen') {
-    volatiliteitExplanation = `Te weinig betaalintervallen (${intervals.length}) om volatiliteit te bepalen.`
+    volatiliteitExplanation = `Te weinig betaalintervallen (${intervals.length}) in de afgelopen 12 maanden om voorspelbaarheid te bepalen.`
   } else {
     if (cv < 0.3) {
       volatiliteitScore = 1
@@ -363,7 +372,7 @@ function debiteurScores(debNr) {
       volatiliteitScore = 5
       volatiliteitLabel = 'zeer grillig'
     }
-    volatiliteitExplanation = `${volatiliteitLabel} (CV=${round(cv, 2)} over ${intervals.length} betaalintervallen).`
+    volatiliteitExplanation = `${volatiliteitLabel} (CV=${round(cv, 2)} over ${intervals.length} betaalintervallen in de afgelopen 12 maanden).`
   }
 
   // ---- AI-sub-parameter: standaard betaaldag pattern ----------------------

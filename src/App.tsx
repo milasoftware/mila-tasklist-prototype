@@ -787,7 +787,7 @@ function volatiliteitPlain(
   showTech: boolean,
 ): string {
   if (vol.confidence === 'geen') {
-    return `Te weinig betalingen (${vol.intervals_observed} intervallen) om de regelmaat te bepalen.`
+    return `Te weinig betalingen (${vol.intervals_observed} intervallen) in de afgelopen 12 maanden om de regelmaat te bepalen.`
   }
   const base =
     vol.label === 'zeer regelmatig'
@@ -992,7 +992,7 @@ function tooltipVolatiliteit(
   return (
     <ScoreTooltip
       title="Hoe voorspelbaar"
-      description="Coefficient of variation (CV) op de tijd tussen opeenvolgende betalingen. Lage CV = regelmatig, hoge CV = grillig."
+      description="Coefficient of variation (CV) op de tijd tussen opeenvolgende betalingen in de afgelopen 12 maanden. Lage CV = regelmatig, hoge CV = grillig."
       thresholds={[
         { score: 1, label: 'CV < 0,3 (zeer regelmatig)' },
         { score: 2, label: '0,3 ≤ CV < 0,6 (regelmatig)' },
