@@ -423,23 +423,55 @@ function HuidigeStandBar({
   )
 }
 
-// Schaalbalk voor "Hoe belangrijk is deze klant voor ons". Toont aandeel
-// in jaaromzet op een schaal van 0% → 15%+ (15% is de drempel voor
-// max-score). Voor de meeste klanten zal de balk grotendeels leeg zijn —
-// dat is feitelijk hoe klein hun aandeel werkelijk is.
-function OmzetconcentratieBar({ pctOmzet }: { pctOmzet: number }) {
-  const scaleMax = 15
-  const clipped = Math.min(scaleMax, Math.max(0, pctOmzet))
-  const pct = (clipped / scaleMax) * 100
+// Quintiel-weergave voor "Hoe belangrijk is deze klant voor ons" —
+// identiek aan PercentilesBar, maar over debiteur-omzet (€ netto) in
+// plaats van taak-bedrag. Toont voor elk van de 5 groepen het bereik en
+// het aantal debiteuren, en markeert in welke groep deze klant valt.
+function OmzetPercentilesBar({
+  activeScore,
+  debiteurOmzet,
+  buckets,
+}: {
+  activeScore: number
+  debiteurOmzet: number
+  buckets: { thresholds: number[]; counts: number[]; min: number; max: number }
+}) {
+  const ranges = [
+    `< ${fmtEUR(buckets.thresholds[0])}`,
+    `${fmtEUR(buckets.thresholds[0])} – ${fmtEUR(buckets.thresholds[1])}`,
+    `${fmtEUR(buckets.thresholds[1])} – ${fmtEUR(buckets.thresholds[2])}`,
+    `${fmtEUR(buckets.thresholds[2])} – ${fmtEUR(buckets.thresholds[3])}`,
+    `≥ ${fmtEUR(buckets.thresholds[3])}`,
+  ]
+  const totaalDebiteuren = buckets.counts.reduce((a, b) => a + b, 0)
   return (
-    <div className="mt-1.5">
-      <div className="relative h-2 bg-slate-100 rounded-full">
-        <div className="absolute inset-y-0 left-0 bg-slate-700 rounded-full" style={{ width: `${pct}%` }} />
-      </div>
-      <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
-        <span>0% (klein)</span>
-        <span className="text-slate-700">{pctOmzet.toFixed(2)}% van jaaromzet</span>
-        <span>15%+ (groot)</span>
+    <div className="mt-3 mb-1">
+      <p className="text-[11px] text-slate-500 mb-1.5">
+        Alle {totaalDebiteuren} debiteuren in vijf even grote groepen op basis van netto omzet —
+        deze klant ({fmtEUR(debiteurOmzet)} netto) zit in groep {activeScore}.
+      </p>
+      <div className="grid grid-cols-5 gap-1">
+        {[1, 2, 3, 4, 5].map((seg) => {
+          const active = seg === activeScore
+          return (
+            <div
+              key={seg}
+              className={`p-2 rounded text-[10px] text-center ring-1 ${
+                active
+                  ? 'bg-slate-900 text-white ring-slate-900'
+                  : 'bg-slate-50 text-slate-500 ring-slate-200'
+              }`}
+            >
+              <div className={`font-medium ${active ? 'text-white' : 'text-slate-700'}`}>
+                Groep {seg}
+              </div>
+              <div className="mt-1 tabular-nums leading-tight">{ranges[seg - 1]}</div>
+              <div className={`mt-1 tabular-nums ${active ? 'text-white/80' : 'text-slate-400'}`}>
+                {buckets.counts[seg - 1]} debiteuren
+              </div>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -1109,24 +1141,41 @@ function tooltipHuidigeStand(
 function tooltipOmzetconcentratie(
   score: number,
   pctOmzet: number | undefined,
+  debiteurOmzet: number | undefined,
 ): React.ReactNode {
+  const p = meta.omzet_percentielen
+  const totaal = meta.jaaromzet_totaal
+  // Drempel-formattering: percentage van netto jaaromzet voor het label,
+  // bedrag (€) als secundair label. Bij ontbreken van percentielen valt de
+  // tooltip terug op een leeg overzicht.
+  const fmtPct = (eur: number) => (totaal > 0 ? `${((eur / totaal) * 100).toFixed(3)}%` : '—')
+  const thresholds = p
+    ? [
+        { score: 1, label: `< ${fmtPct(p.p20)} (< ${fmtEUR(p.p20)} netto)` },
+        { score: 2, label: `${fmtPct(p.p20)} – ${fmtPct(p.p40)} (${fmtEUR(p.p20)} – ${fmtEUR(p.p40)})` },
+        { score: 3, label: `${fmtPct(p.p40)} – ${fmtPct(p.p60)} (${fmtEUR(p.p40)} – ${fmtEUR(p.p60)})` },
+        { score: 4, label: `${fmtPct(p.p60)} – ${fmtPct(p.p80)} (${fmtEUR(p.p60)} – ${fmtEUR(p.p80)})` },
+        { score: 5, label: `≥ ${fmtPct(p.p80)} (≥ ${fmtEUR(p.p80)} netto)` },
+      ]
+    : []
+  const populatieN = meta.omzet_populatie_debiteuren
+  const scopeLabel = meta.omzet_scope === 'salesarea' ? 'sales area' : 'administratie'
+  const populatieRegel = populatieN
+    ? `Top 20% van ${populatieN} debiteuren in deze ${scopeLabel} (op netto omzet, ex BTW).`
+    : `Quintielen binnen deze ${scopeLabel} (netto omzet, ex BTW).`
+  const currentRegel =
+    debiteurOmzet !== undefined && pctOmzet !== undefined
+      ? `${fmtEUR(debiteurOmzet)} netto · ${pctOmzet.toFixed(2)}% van netto jaaromzet → score ${score}`
+      : pctOmzet !== undefined
+        ? `${pctOmzet.toFixed(2)}% van netto jaaromzet → score ${score}`
+        : undefined
   return (
     <ScoreTooltip
       title="Hoe belangrijk is deze klant"
-      description="Aandeel van deze klant in onze totale jaaromzet. Hoe groter het aandeel, hoe meer impact wanbetaling zou hebben."
-      thresholds={[
-        { score: 1, label: '< 0,5% van jaaromzet' },
-        { score: 2, label: '0,5 – 2%' },
-        { score: 3, label: '2 – 5%' },
-        { score: 4, label: '5 – 15%' },
-        { score: 5, label: '≥ 15%' },
-      ]}
+      description={`Aandeel van deze klant in onze totale netto jaaromzet (ex BTW). De schaal verdeelt alle debiteuren met omzet in vijf even grote groepen (quintielen). ${populatieRegel}`}
+      thresholds={thresholds}
       activeScore={score}
-      current={
-        pctOmzet !== undefined
-          ? `${pctOmzet.toFixed(2)}% van jaaromzet → score ${score}`
-          : undefined
-      }
+      current={currentRegel}
     />
   )
 }
@@ -1739,15 +1788,24 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
             tooltip={tooltipOmzetconcentratie(
               task.risico.omzetconcentratie,
               task.risico.omzetconcentratie_pct,
+              task.risico.omzetconcentratie_omzet,
             )}
             caption={
               task.risico.omzetconcentratie_pct !== undefined
-                ? `Goed voor ${task.risico.omzetconcentratie_pct.toFixed(2)}% van onze jaaromzet.`
+                ? `Omzet van deze klant: ${
+                    task.risico.omzetconcentratie_omzet !== undefined
+                      ? `${fmtEUR(task.risico.omzetconcentratie_omzet)} netto`
+                      : '—'
+                  }. Goed voor ${task.risico.omzetconcentratie_pct.toFixed(2)}% van onze netto jaaromzet (${fmtEUR(meta.jaaromzet_totaal)} netto).`
                 : undefined
             }
             viz={
-              task.risico.omzetconcentratie_pct !== undefined ? (
-                <OmzetconcentratieBar pctOmzet={task.risico.omzetconcentratie_pct} />
+              task.risico.omzetconcentratie_omzet !== undefined && meta.omzet_buckets ? (
+                <OmzetPercentilesBar
+                  activeScore={task.risico.omzetconcentratie}
+                  debiteurOmzet={task.risico.omzetconcentratie_omzet}
+                  buckets={meta.omzet_buckets}
+                />
               ) : undefined
             }
           />

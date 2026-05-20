@@ -247,11 +247,17 @@ const allFacturen = postsData.invoices.filter((i) => i['Invoicetype/Documenttype
 
 const openFacturenAll = allFacturen.filter((f) => num(f['Balance amount']) > 0)
 const totalOpenAR = openFacturenAll.reduce((s, f) => s + num(f['Balance amount']), 0)
-const yearlyOmzetTotal = allFacturen.reduce((s, f) => s + Math.max(0, num(f['Invoice amount'])), 0)
+// Netto-jaaromzet: ex BTW, creditnota's netto afgetrokken (geen Math.max meer).
+// Per factuur: Invoice amount − VAT amount invoice. Geldt voor zowel totaal als
+// per-debiteur omzet, zodat het aandeel onderling sluit.
+const yearlyOmzetTotal = allFacturen.reduce(
+  (s, f) => s + (num(f['Invoice amount']) - num(f['VAT amount invoice'])),
+  0,
+)
 
 console.log(`  ${allFacturen.length} facturen, ${openFacturenAll.length} open`)
 console.log(`  Totale openstaande AR: ${formatEUR(totalOpenAR)}`)
-console.log(`  Jaar-omzet: ${formatEUR(yearlyOmzetTotal)}`)
+console.log(`  Netto jaar-omzet (ex BTW): ${formatEUR(yearlyOmzetTotal)}`)
 
 // ----- per debiteur ----------------------------------------------------------
 
@@ -262,6 +268,54 @@ for (const f of allFacturen) {
   const e = byDeb.get(k)
   e.facturen.push(f)
   if (num(f['Balance amount']) > 0) e.openFacturen.push(f)
+}
+
+// Netto-omzet per debiteur (ex BTW, creditnota's netto). Voor de
+// omzetconcentratie-score gebruiken we percentielen over deze populatie
+// (alle debiteuren met omzet > 0 in deze administratie), zodat de schaal
+// zichzelf kalibreert naar de feitelijke verdeling.
+const netOmzetPerDeb = new Map()
+for (const [k, e] of byDeb.entries()) {
+  const netOmzet = e.facturen.reduce(
+    (s, f) => s + (num(f['Invoice amount']) - num(f['VAT amount invoice'])),
+    0,
+  )
+  netOmzetPerDeb.set(k, netOmzet)
+}
+const omzetPopulatie = [...netOmzetPerDeb.values()].filter((v) => v > 0).sort((a, b) => a - b)
+function percentile(arr, p) {
+  if (arr.length === 0) return 0
+  const idx = Math.floor((p / 100) * (arr.length - 1))
+  return arr[idx]
+}
+const OMZET_P20 = percentile(omzetPopulatie, 20)
+const OMZET_P40 = percentile(omzetPopulatie, 40)
+const OMZET_P60 = percentile(omzetPopulatie, 60)
+const OMZET_P80 = percentile(omzetPopulatie, 80)
+console.log(
+  `  Omzet-percentielen netto (P20/P40/P60/P80): ${formatEUR(OMZET_P20)} / ${formatEUR(OMZET_P40)} / ${formatEUR(OMZET_P60)} / ${formatEUR(OMZET_P80)}`,
+)
+
+// Aantal debiteuren per quintiel (voor de PercentilesBar-visualisatie in
+// de UI, parallel aan bedrag_buckets).
+const omzetBucketCounts = [0, 0, 0, 0, 0]
+for (const v of omzetPopulatie) {
+  if (v < OMZET_P20) omzetBucketCounts[0]++
+  else if (v < OMZET_P40) omzetBucketCounts[1]++
+  else if (v < OMZET_P60) omzetBucketCounts[2]++
+  else if (v < OMZET_P80) omzetBucketCounts[3]++
+  else omzetBucketCounts[4]++
+}
+const omzetBuckets = {
+  thresholds: [
+    round(OMZET_P20, 2),
+    round(OMZET_P40, 2),
+    round(OMZET_P60, 2),
+    round(OMZET_P80, 2),
+  ],
+  counts: omzetBucketCounts,
+  min: round(omzetPopulatie[0] ?? 0, 2),
+  max: round(omzetPopulatie[omzetPopulatie.length - 1] ?? 0, 2),
 }
 
 function debiteurScores(debNr) {
@@ -420,14 +474,15 @@ function debiteurScores(debNr) {
 
   const huidigeStand = (pctOverdueScore + oldestDaysScore) / 2
 
-  // Omzetconcentratie — debiteur-aandeel in jaar-omzet
-  const debiteurOmzet = e.facturen.reduce((s, f) => s + Math.max(0, num(f['Invoice amount'])), 0)
+  // Omzetconcentratie — debiteur-aandeel in jaar-omzet (netto, ex BTW).
+  // Score is een quintiel binnen de scope-populatie (zelf-kalibrerend).
+  const debiteurOmzet = netOmzetPerDeb.get(debNr) ?? 0
   const pctOmzet = yearlyOmzetTotal > 0 ? debiteurOmzet / yearlyOmzetTotal : 0
   let omzetconcentratie
-  if (pctOmzet < 0.005) omzetconcentratie = 1
-  else if (pctOmzet < 0.02) omzetconcentratie = 2
-  else if (pctOmzet < 0.05) omzetconcentratie = 3
-  else if (pctOmzet < 0.15) omzetconcentratie = 4
+  if (debiteurOmzet < OMZET_P20) omzetconcentratie = 1
+  else if (debiteurOmzet < OMZET_P40) omzetconcentratie = 2
+  else if (debiteurOmzet < OMZET_P60) omzetconcentratie = 3
+  else if (debiteurOmzet < OMZET_P80) omzetconcentratie = 4
   else omzetconcentratie = 5
 
   // Werkelijke vs afgesproken termijn
@@ -476,6 +531,7 @@ function debiteurScores(debNr) {
     pctOverdue: round(pctOverdue * 100, 1),
     oldestDays,
     pctOmzet: round(pctOmzet * 100, 2),
+    debiteurOmzet: round(debiteurOmzet, 2),
     avgAgreed,
     avgActual,
     potentieel,
@@ -693,6 +749,7 @@ for (const c of taskCandidates) {
       krediet: null,
       omzetconcentratie: scores.omzetconcentratie,
       omzetconcentratie_pct: scores.pctOmzet,
+      omzetconcentratie_omzet: scores.debiteurOmzet,
       betaalgedrag_breakdown: scores.betaalgedrag_breakdown,
     },
     potentieel: {
@@ -806,6 +863,16 @@ const out = {
     bron: 'Covebo geanonimiseerde export (jaarhistorie 2025-05-11 → 2026-05-11)',
     administratie: postsData.administration?.code || 'ADMIN001',
     total_open_ar: round(totalOpenAR, 2),
+    jaaromzet_totaal: round(yearlyOmzetTotal, 2),
+    omzet_scope: 'administratie',
+    omzet_populatie_debiteuren: omzetPopulatie.length,
+    omzet_percentielen: {
+      p20: round(OMZET_P20, 2),
+      p40: round(OMZET_P40, 2),
+      p60: round(OMZET_P60, 2),
+      p80: round(OMZET_P80, 2),
+    },
+    omzet_buckets: omzetBuckets,
     total_facturen: allFacturen.length,
     total_open_facturen: openFacturenAll.length,
     total_taken_gegenereerd: tasks.length,

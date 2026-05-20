@@ -63,6 +63,7 @@ export type Task = {
     krediet: number | null
     omzetconcentratie: number
     omzetconcentratie_pct?: number
+    omzetconcentratie_omzet?: number
     betaalgedrag_breakdown?: BetaalgedragBreakdown
   }
   potentieel: {
@@ -156,6 +157,21 @@ export type Meta = {
   bron: string
   administratie: string
   total_open_ar: number
+  jaaromzet_totaal: number
+  omzet_scope?: string
+  omzet_populatie_debiteuren?: number
+  omzet_percentielen?: {
+    p20: number
+    p40: number
+    p60: number
+    p80: number
+  }
+  omzet_buckets?: {
+    thresholds: number[]
+    counts: number[]
+    min: number
+    max: number
+  }
   total_facturen: number
   total_open_facturen: number
   total_taken_gegenereerd: number
