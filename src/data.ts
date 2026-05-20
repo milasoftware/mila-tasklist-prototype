@@ -75,7 +75,7 @@ export type Task = {
 export type Confidence = 'hoog' | 'middel' | 'geen'
 
 export type BetaalgedragBreakdown = {
-  dso: { score: number; avg_days_late: number; invoice_count: number }
+  dso: { score: number; median_days_late: number; invoice_count: number }
   trend: {
     score: number | null
     label: string

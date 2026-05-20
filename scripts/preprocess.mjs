@@ -267,13 +267,21 @@ function debiteurScores(debNr) {
     if (!lastPay) continue
     dsoVals.push(daysBetween(lastPay, f.Duedate))
   }
-  const avgDaysLate = dsoVals.length ? dsoVals.reduce((a, b) => a + b, 0) / dsoVals.length : 0
+  // Mediaan i.p.v. gemiddelde: robuuster tegen uitschieters (één factuur die
+  // 500 dagen later betaald werd trekt het gemiddelde scheef).
+  let medianDaysLate = 0
+  if (dsoVals.length) {
+    const sortedVals = [...dsoVals].sort((a, b) => a - b)
+    const mid = Math.floor(sortedVals.length / 2)
+    medianDaysLate =
+      sortedVals.length % 2 === 0 ? (sortedVals[mid - 1] + sortedVals[mid]) / 2 : sortedVals[mid]
+  }
 
   let dsoScore
-  if (avgDaysLate <= 0) dsoScore = 1
-  else if (avgDaysLate <= 10) dsoScore = 2
-  else if (avgDaysLate <= 30) dsoScore = 3
-  else if (avgDaysLate <= 60) dsoScore = 4
+  if (medianDaysLate <= 0) dsoScore = 1
+  else if (medianDaysLate <= 10) dsoScore = 2
+  else if (medianDaysLate <= 30) dsoScore = 3
+  else if (medianDaysLate <= 60) dsoScore = 4
   else dsoScore = 5
 
   // ---- AI-sub-parameter: trend (Mann-Kendall over maandelijkse DSO) -------
@@ -426,7 +434,7 @@ function debiteurScores(debNr) {
     disputen: null,
     krediet: null,
     risicoScore: round(risicoScore, 2),
-    avgDaysLate: Math.round(avgDaysLate),
+    medianDaysLate: Math.round(medianDaysLate),
     pctOverdue: round(pctOverdue * 100, 1),
     oldestDays,
     pctOmzet: round(pctOmzet * 100, 2),
@@ -441,7 +449,7 @@ function debiteurScores(debNr) {
     betaalgedrag_breakdown: {
       dso: {
         score: dsoScore,
-        avg_days_late: Math.round(avgDaysLate),
+        median_days_late: Math.round(medianDaysLate),
         invoice_count: dsoVals.length,
       },
       trend: {
