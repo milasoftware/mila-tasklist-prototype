@@ -1540,6 +1540,60 @@ function ComponentBlock({
   )
 }
 
+// Verklaring van de Risicoscore: weegt de drie wél beschikbare sub-scores
+// (betaalgedrag 30, huidige stand 25, omzetconcentratie 10) genormaliseerd
+// op 65. Disputen en kredietverzekering ontbreken in de Covebo-data en
+// vallen daardoor uit de noemer.
+function RisicoBreakdown({ task, showSources }: { task: Task; showSources: boolean }) {
+  const r = task.risico
+  const weights = { betaalgedrag: 30, huidige_stand: 25, omzetconcentratie: 10 }
+  const totaalGewicht = weights.betaalgedrag + weights.huidige_stand + weights.omzetconcentratie
+  const bijdrage = {
+    betaalgedrag: (r.betaalgedrag * weights.betaalgedrag) / totaalGewicht,
+    huidige_stand: (r.huidige_stand * weights.huidige_stand) / totaalGewicht,
+    omzetconcentratie: (r.omzetconcentratie * weights.omzetconcentratie) / totaalGewicht,
+  }
+  const totaal = bijdrage.betaalgedrag + bijdrage.huidige_stand + bijdrage.omzetconcentratie
+  const pct = (w: number) => `${Math.round((w / totaalGewicht) * 100)}%`
+  return (
+    <section className="border border-slate-200 rounded-md p-4 mt-4">
+      <h4 className="font-medium text-slate-900 mb-1">Zo komt deze risicoscore tot stand</h4>
+      <p className="text-sm text-slate-600 mb-3">
+        Drie sub-scores van 1 tot 5, elk met een eigen gewicht. Disputen en kredietverzekering
+        ontbreken in de data — de score is genormaliseerd over de drie wél beschikbare categorieën
+        (30 + 25 + 10 = 65).
+      </p>
+      <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
+        <span className="text-slate-600">Hoe is het betaalgedrag</span>
+        <span className="text-slate-500">{fmtNL(r.betaalgedrag, 2)}</span>
+        <span className="text-slate-400">× {pct(weights.betaalgedrag)}</span>
+        <span className="text-slate-700 text-right">{fmtNL(bijdrage.betaalgedrag, 2)}</span>
+        <span className="text-slate-600">Hoe staan we er nu voor</span>
+        <span className="text-slate-500">{fmtNL(r.huidige_stand, 2)}</span>
+        <span className="text-slate-400">× {pct(weights.huidige_stand)}</span>
+        <span className="text-slate-700 text-right">{fmtNL(bijdrage.huidige_stand, 2)}</span>
+        <span className="text-slate-600">Hoe belangrijk is deze klant voor ons</span>
+        <span className="text-slate-500">{fmtNL(r.omzetconcentratie, 0)}</span>
+        <span className="text-slate-400">× {pct(weights.omzetconcentratie)}</span>
+        <span className="text-slate-700 text-right">{fmtNL(bijdrage.omzetconcentratie, 2)}</span>
+        <span className="text-slate-900 font-medium border-t border-slate-200 pt-1.5 mt-1">
+          Totaal
+        </span>
+        <span className="col-span-2 border-t border-slate-200 pt-1.5 mt-1"></span>
+        <span className="text-slate-900 font-semibold text-right border-t border-slate-200 pt-1.5 mt-1">
+          {fmtNL(totaal, 2)}
+        </span>
+      </div>
+      {showSources && (
+        <p className="font-mono text-xs text-slate-400 mt-3">
+          ({fmtNL(r.betaalgedrag, 2)} × 30 + {fmtNL(r.huidige_stand, 2)} × 25 +{' '}
+          {fmtNL(r.omzetconcentratie, 0)} × 10) / 65 = {fmtNL(totaal, 2)}
+        </p>
+      )}
+    </section>
+  )
+}
+
 function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
   const calc = {
     impact: task.impact.score * WEIGHTS.impact,
@@ -1832,6 +1886,7 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
             </div>
           )}
         </div>
+        <RisicoBreakdown task={task} showSources={showSources} />
       </ComponentBlock>
 
       {/* Factuur-tabellen 2-koloms */}
