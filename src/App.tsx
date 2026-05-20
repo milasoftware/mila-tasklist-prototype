@@ -1116,10 +1116,14 @@ function FactuurTable({
   facturen,
   highlightIds,
   showOnlyOpen,
+  showFactuurdatum,
+  showBetaaldatum,
 }: {
   facturen: Factuur[]
   highlightIds?: Set<string>
   showOnlyOpen?: boolean
+  showFactuurdatum?: boolean
+  showBetaaldatum?: boolean
 }) {
   const list = showOnlyOpen ? facturen.filter((f) => f.status === 'open') : facturen
   // Open posten eerst, daarbinnen oudste vervaldatum eerst, betaalde daarna recent eerst
@@ -1141,7 +1145,13 @@ function FactuurTable({
         <thead>
           <tr className="text-left text-slate-500 border-b border-slate-200">
             <th className="py-1.5 pr-2 font-medium">Factuur</th>
+            {showFactuurdatum && (
+              <th className="py-1.5 pr-2 font-medium">Datum</th>
+            )}
             <th className="py-1.5 pr-2 font-medium">Vervalt</th>
+            {showBetaaldatum && (
+              <th className="py-1.5 pr-2 font-medium">Betaald</th>
+            )}
             <th className="py-1.5 pr-2 font-medium text-right">Bedrag</th>
             <th className="py-1.5 pr-2 font-medium text-right">Open</th>
             <th className="py-1.5 pr-2 font-medium">Status</th>
@@ -1158,7 +1168,15 @@ function FactuurTable({
                 className={`border-b border-slate-50 last:border-0 ${isHighlight ? 'bg-amber-50/50' : ''}`}
               >
                 <td className="py-1.5 pr-2 font-mono tabular-nums">{f.id}</td>
+                {showFactuurdatum && (
+                  <td className="py-1.5 pr-2 tabular-nums text-slate-500">{f.factuurdatum}</td>
+                )}
                 <td className="py-1.5 pr-2 tabular-nums text-slate-500">{f.vervaldatum}</td>
+                {showBetaaldatum && (
+                  <td className="py-1.5 pr-2 tabular-nums text-slate-500">
+                    {f.betaaldatum ?? <span className="text-slate-300">—</span>}
+                  </td>
+                )}
                 <td className="py-1.5 pr-2 tabular-nums text-right">{fmtEUR(f.bedrag)}</td>
                 <td className="py-1.5 pr-2 tabular-nums text-right">
                   {f.openstaand === 0 ? <span className="text-slate-300">—</span> : fmtEUR(f.openstaand)}
@@ -1289,11 +1307,15 @@ function FactuurCard({
   subtitle,
   facturen,
   highlightIds,
+  showFactuurdatum,
+  showBetaaldatum,
 }: {
   title: string
   subtitle?: React.ReactNode
   facturen: Factuur[]
   highlightIds?: Set<string>
+  showFactuurdatum?: boolean
+  showBetaaldatum?: boolean
 }) {
   return (
     <section className="border border-slate-200 rounded-md p-4">
@@ -1303,7 +1325,12 @@ function FactuurCard({
       {subtitle && (
         <p className="text-xs text-slate-500 mb-3 leading-relaxed">{subtitle}</p>
       )}
-      <FactuurTable facturen={facturen} highlightIds={highlightIds} />
+      <FactuurTable
+        facturen={facturen}
+        highlightIds={highlightIds}
+        showFactuurdatum={showFactuurdatum}
+        showBetaaldatum={showBetaaldatum}
+      />
     </section>
   )
 }
@@ -1761,9 +1788,11 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           <FactuurCard
             title="Alle facturen van deze debiteur"
-            subtitle="Volledige factuurhistorie (open en betaald). Alleen records van het type 'Factuur'."
+            subtitle="Volledige factuurhistorie (open en betaald). Betaaldatum is de laatste betaling — bij deelbetalingen het moment dat alles binnen was."
             facturen={alleFacturenDebiteur}
             highlightIds={taakIds}
+            showFactuurdatum
+            showBetaaldatum
           />
           <LosseBetalingCard
             title="Alle betalingen van deze debiteur"

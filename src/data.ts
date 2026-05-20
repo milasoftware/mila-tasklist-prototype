@@ -122,6 +122,10 @@ export type Factuur = {
   bedrag: number
   openstaand: number
   status: 'open' | 'betaald' | 'credit_nota'
+  // Laatste betaaldatum (max van alle betalingen op deze factuur). Bij
+  // deelbetalingen het moment dat alles binnen was. Null als de factuur nog
+  // openstaat of geen betalingen heeft.
+  betaaldatum: string | null
 }
 
 export type Betaling = {

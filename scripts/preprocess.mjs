@@ -691,6 +691,13 @@ for (const nr of relevantDebNrs) {
     const id = f.Invoicenumber
     const bedrag = num(f['Invoice amount'])
     const openstaand = num(f['Balance amount'])
+    // Laatste betaaldatum = max van alle payment dates. Bij deelbetalingen
+    // is dit het moment waarop het volledige bedrag binnen was. Alleen
+    // ingevuld als factuur volledig betaald is.
+    const isPaid = openstaand === 0 && (f.payments || []).length > 0
+    const betaaldatum = isPaid
+      ? f.payments.reduce((max, p) => (p.date > max ? p.date : max), '')
+      : null
     facturenOut.push({
       id,
       debiteurnummer: nr,
@@ -699,6 +706,7 @@ for (const nr of relevantDebNrs) {
       bedrag,
       openstaand,
       status: openstaand === 0 ? 'betaald' : openstaand > 0 ? 'open' : 'credit_nota',
+      betaaldatum: betaaldatum || null,
     })
     for (const p of f.payments || []) {
       betalingenOut.push({
