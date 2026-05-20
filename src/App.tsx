@@ -941,7 +941,7 @@ function tooltipDso(score: number, days: number, count: number): React.ReactNode
   return (
     <ScoreTooltip
       title="Hoeveel dagen meestal te laat"
-      description="Mediaan van het aantal dagen dat over de vervaldatum heen wordt gegaan op betaalde facturen (DSO na vervaldatum). Mediaan i.p.v. gemiddelde — robuuster tegen uitschieters."
+      description="Mediaan van het aantal dagen dat over de vervaldatum heen wordt gegaan op facturen die in de afgelopen 12 maanden volledig zijn betaald (DSO na vervaldatum). Mediaan i.p.v. gemiddelde — robuuster tegen uitschieters."
       thresholds={[
         { score: 1, label: 'op tijd of eerder' },
         { score: 2, label: '1 – 7 dagen te laat' },
@@ -950,7 +950,7 @@ function tooltipDso(score: number, days: number, count: number): React.ReactNode
         { score: 5, label: '45+ dagen te laat' },
       ]}
       activeScore={score}
-      current={`Mediaan ${days}d te laat over ${count} betaalde facturen → score ${score}`}
+      current={`Mediaan ${days}d te laat over ${count} facturen betaald in de afgelopen 12 maanden → score ${score}`}
     />
   )
 }
@@ -1586,7 +1586,7 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
                   task.risico.betaalgedrag_breakdown.dso.median_days_late,
                   task.risico.betaalgedrag_breakdown.dso.invoice_count,
                 )}
-                caption={`Mediaan: ${task.risico.betaalgedrag_breakdown.dso.median_days_late} dagen na de vervaldatum, op basis van ${task.risico.betaalgedrag_breakdown.dso.invoice_count} facturen.`}
+                caption={`Mediaan: ${task.risico.betaalgedrag_breakdown.dso.median_days_late} dagen na de vervaldatum, op basis van ${task.risico.betaalgedrag_breakdown.dso.invoice_count} facturen betaald in de afgelopen 12 maanden.`}
                 viz={
                   <DsoThermometer
                     days={task.risico.betaalgedrag_breakdown.dso.median_days_late}

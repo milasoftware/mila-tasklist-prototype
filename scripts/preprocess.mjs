@@ -24,6 +24,12 @@ const OUT_FILE = path.join(REPO, 'src/data.generated.json')
 const SNAPSHOT = '2026-05-11' // laatste factuurdatum in de dataset
 const TOP_N = Infinity // alle gegenereerde taken meenemen
 
+// Tijdvenster voor de DSO-mediaan ("hoeveel dagen meestal te laat").
+// Aligneert met de rest van de AI-componenten die op ~12 maanden historie
+// werken en zorgt dat een verbeterende debiteur niet eeuwig blijft hangen
+// op oud betaalgedrag.
+const DSO_WINDOW_DAYS = 365
+
 // ----- helpers ---------------------------------------------------------------
 
 const today = new Date(SNAPSHOT)
@@ -257,14 +263,20 @@ function debiteurScores(debNr) {
   const e = byDeb.get(debNr)
   if (!e) return null
 
-  // DSO — gemiddelde dagen-te-laat op volledig betaalde facturen
+  // DSO — mediaan dagen-te-laat op volledig betaalde facturen.
+  // Alle betaalde facturen blijven beschikbaar voor andere berekeningen
+  // (trend, omzet, termijnen). Voor de DSO-mediaan zelf kijken we alleen
+  // naar facturen die in het 12-maands venster zijn afgerond, zodat oud
+  // gedrag een verbeterende debiteur niet eeuwig achtervolgt.
   const paid = e.facturen.filter(
     (f) => f.payments && f.payments.length > 0 && num(f['Balance amount']) === 0 && f.Duedate,
   )
+  const dsoWindowStartMs = new Date(SNAPSHOT).getTime() - DSO_WINDOW_DAYS * 86400000
   const dsoVals = []
   for (const f of paid) {
     const lastPay = f.payments.reduce((max, p) => (p.date > max ? p.date : max), '')
     if (!lastPay) continue
+    if (new Date(lastPay).getTime() < dsoWindowStartMs) continue
     dsoVals.push(daysBetween(lastPay, f.Duedate))
   }
   // Mediaan i.p.v. gemiddelde: robuuster tegen uitschieters (één factuur die
