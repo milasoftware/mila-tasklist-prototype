@@ -279,9 +279,9 @@ function debiteurScores(debNr) {
 
   let dsoScore
   if (medianDaysLate <= 0) dsoScore = 1
-  else if (medianDaysLate <= 10) dsoScore = 2
-  else if (medianDaysLate <= 30) dsoScore = 3
-  else if (medianDaysLate <= 60) dsoScore = 4
+  else if (medianDaysLate <= 7) dsoScore = 2
+  else if (medianDaysLate <= 21) dsoScore = 3
+  else if (medianDaysLate <= 45) dsoScore = 4
   else dsoScore = 5
 
   // ---- AI-sub-parameter: trend (Mann-Kendall over maandelijkse DSO) -------

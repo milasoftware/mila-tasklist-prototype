@@ -944,10 +944,10 @@ function tooltipDso(score: number, days: number, count: number): React.ReactNode
       description="Mediaan van het aantal dagen dat over de vervaldatum heen wordt gegaan op betaalde facturen (DSO na vervaldatum). Mediaan i.p.v. gemiddelde — robuuster tegen uitschieters."
       thresholds={[
         { score: 1, label: 'op tijd of eerder' },
-        { score: 2, label: '1 – 10 dagen te laat' },
-        { score: 3, label: '11 – 30 dagen te laat' },
-        { score: 4, label: '31 – 60 dagen te laat' },
-        { score: 5, label: '60+ dagen te laat' },
+        { score: 2, label: '1 – 7 dagen te laat' },
+        { score: 3, label: '8 – 21 dagen te laat' },
+        { score: 4, label: '22 – 45 dagen te laat' },
+        { score: 5, label: '45+ dagen te laat' },
       ]}
       activeScore={score}
       current={`Mediaan ${days}d te laat over ${count} betaalde facturen → score ${score}`}
