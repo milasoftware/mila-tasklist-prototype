@@ -1081,7 +1081,15 @@ function TaskRow({ task, selected, onClick }: { task: Task; selected: boolean; o
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
-            <h3 className="font-medium text-slate-900 truncate">{task.debiteur}</h3>
+            <h3 className="font-medium text-slate-900 truncate">
+              {task.debiteurnummer && (
+                <>
+                  <span className="tabular-nums">{task.debiteurnummer}</span>
+                  <span className="text-slate-300 mx-2">|</span>
+                </>
+              )}
+              {task.debiteur}
+            </h3>
             {factuurCount > 1 && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 tabular-nums shrink-0">
                 {factuurCount} facturen
@@ -1343,7 +1351,15 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
       {/* Top header — debiteurnaam + ring */}
       <div className="flex items-start gap-6 bg-white border border-slate-200 rounded-md p-5">
         <header className="flex-1 min-w-0">
-          <h2 className="text-xl font-semibold text-slate-900">{task.debiteur}</h2>
+          <h2 className="text-xl font-semibold text-slate-900">
+            {task.debiteurnummer && (
+              <>
+                <span className="tabular-nums">{task.debiteurnummer}</span>
+                <span className="text-slate-300 mx-2">|</span>
+              </>
+            )}
+            {task.debiteur}
+          </h2>
           <p className="text-slate-700 mt-1">{task.taakomschrijving}</p>
           <p className="text-sm text-slate-500 mt-2">{task.aanleiding}</p>
         </header>
