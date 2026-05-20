@@ -1018,16 +1018,14 @@ function tooltipHuidigeStand(
   oudsteScore: number | undefined,
 ): React.ReactNode {
   const pctSchaal = [
-    { score: 0, label: '0% (niets vervallen)' },
-    { score: 1, label: '1 – 10%' },
+    { score: 1, label: '0 – 10%' },
     { score: 2, label: '11 – 25%' },
     { score: 3, label: '26 – 50%' },
     { score: 4, label: '51 – 75%' },
     { score: 5, label: '> 75%' },
   ]
   const oudsteSchaal = [
-    { score: 0, label: 'niet vervallen' },
-    { score: 1, label: '1 – 15 dagen' },
+    { score: 1, label: '0 – 15 dagen' },
     { score: 2, label: '16 – 30 dagen' },
     { score: 3, label: '31 – 60 dagen' },
     { score: 4, label: '61 – 90 dagen' },

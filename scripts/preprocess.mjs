@@ -401,20 +401,18 @@ function debiteurScores(debNr) {
     if (d > oldestDays) oldestDays = d
   }
 
-  // Sub-score 1: % vervallen → 0-5
+  // Sub-score 1: % vervallen → 1-5
   const pctOverduePerc = pctOverdue * 100
   let pctOverdueScore
-  if (pctOverduePerc === 0) pctOverdueScore = 0
-  else if (pctOverduePerc <= 10) pctOverdueScore = 1
+  if (pctOverduePerc <= 10) pctOverdueScore = 1
   else if (pctOverduePerc <= 25) pctOverdueScore = 2
   else if (pctOverduePerc <= 50) pctOverdueScore = 3
   else if (pctOverduePerc <= 75) pctOverdueScore = 4
   else pctOverdueScore = 5
 
-  // Sub-score 2: leeftijd oudste post → 0-5
+  // Sub-score 2: leeftijd oudste post → 1-5
   let oldestDaysScore
-  if (oldestDays === 0) oldestDaysScore = 0
-  else if (oldestDays <= 15) oldestDaysScore = 1
+  if (oldestDays <= 15) oldestDaysScore = 1
   else if (oldestDays <= 30) oldestDaysScore = 2
   else if (oldestDays <= 60) oldestDaysScore = 3
   else if (oldestDays <= 90) oldestDaysScore = 4
