@@ -1,5 +1,5 @@
 // Data laag — leest uit data.generated.json (gegenereerd door
-// scripts/preprocess.mjs uit de Covebo-export).
+// scripts/preprocess.mjs uit de dummy export).
 //
 // Bevat zowel de "flat" Task-shape die de huidige UI gebruikt (pad A),
 // als de losse relationele entiteiten Debiteur / Factuur / Betaling

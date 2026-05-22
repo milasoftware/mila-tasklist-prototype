@@ -10,7 +10,7 @@ Concreet stappenplan om wanbetaler-voorspelling toe te voegen aan Mila, met expl
 
 - **Definitie wanbetaler:** een debiteur is een wanbetaler op het moment dat hij te laat is met betalen. Operationeel betekent dit: een debiteur krijgt label `is_wanbetaler = true` als hij op de snapshot-datum **minstens één openstaande factuur heeft waarvan de vervaldatum gepasseerd is**.
 
-  *Implicatie:* met de huidige Covebo-snapshot zou dit ongeveer 60% van de actieve debiteuren als wanbetaler labelen. Dat is een werkbare verdeling voor TabPFN, maar de voorspelling gaat dan vooral over "lijkt deze klant op de groep die meestal vervallen posten heeft?" — niet over "gaat hij failliet". Eerlijk communiceren via de uitleg-tekst.
+  *Implicatie:* met de huidige dummy-snapshot zou dit ongeveer 60% van de actieve debiteuren als wanbetaler labelen. Dat is een werkbare verdeling voor TabPFN, maar de voorspelling gaat dan vooral over "lijkt deze klant op de groep die meestal vervallen posten heeft?" — niet over "gaat hij failliet". Eerlijk communiceren via de uitleg-tekst.
 
   *Caveat in feature-keuze:* sommige features die we al hebben (zoals `pctOverdue` of `oldestDays`) zijn direct afgeleid van het label — die mogen niet als input meegegeven worden, anders voorspelt het model zichzelf. Veilige features: historisch gemiddelde DSO, trend, volatiliteit, patroon, omzetaandeel, factuur-tellingen.
 
@@ -28,7 +28,7 @@ Supabase Edge Function
     │
     │  POST HuggingFace Inference API
     │  Bearer ${HF_TOKEN}
-    │  Body: TabPFN-input (Covebo-historie + huidige klant)
+    │  Body: TabPFN-input (dummy historie + huidige klant)
     ▼
 HuggingFace (Prior-Labs/TabPFN-v2-clf)
     │
@@ -80,7 +80,7 @@ Output: extra veld `debiteur_features` (object) en `is_wanbetaler` (boolean) in 
 
 `supabase/functions/wanbetaler/index.ts`:
 - Accepteert POST met `{ debiteur_id, features }`
-- Vraagt de bijbehorende Covebo-historie op (uit een meegeleverde JSON of uit Supabase storage)
+- Vraagt de bijbehorende dummy historie op (uit een meegeleverde JSON of uit Supabase storage)
 - Stuurt training-rijen + query-rij naar HF Inference API
 - Transformeert response naar Mila's score-schema
 - Geeft confidence-label terug op basis van geldige predictie + aantal training-voorbeelden
@@ -134,6 +134,6 @@ Zodra TabPFN draait en we waarde zien, kunnen we Pad B (eigen XGBoost) overwegen
 - Frontend en UI ongewijzigd
 - Edge Function-interne implementatie verandert: in plaats van HF aanroepen, een gebundeld `model.json` laden en lokaal inferen
 - Training-pipeline opzetten als losse Python notebook of GitHub Action
-- Voorwaarde: meer historie (2–3 jaar) of meer klanten dan alleen Covebo
+- Voorwaarde: meer historie (2–3 jaar) of meer klanten dan alleen deze dummy dataset
 
 Geen weggegooid werk — alleen de inference-laag verandert.

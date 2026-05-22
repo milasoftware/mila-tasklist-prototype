@@ -6,7 +6,7 @@ Status van de voorspellings- en patroon-componenten. Aanvinken naarmate werk kla
 
 ## Fase 1 — Statistische componenten ✅ AF
 
-Berekend uit Covebo-historie tijdens `npm run preprocess`. Geen externe infra nodig.
+Berekend uit dummy historie tijdens `npm run preprocess`. Geen externe infra nodig.
 
 - [x] **Trend-detectie** — Mann-Kendall over maandelijkse DSO-tijdreeks per debiteur. Output: score, label (sterk verslechterend/stabiel/verbeterend), tau, p-value.
 - [x] **Volatiliteit** — coefficient of variation op intervallen tussen unieke betaaldata. Output: score, label (regelmatig/wisselend/grillig), CV.
@@ -37,14 +37,14 @@ Voorwaarde voor alle volgende AI-werk: ergens een functie kunnen draaien voor AP
 
 ## Fase 3 — Wanbetaler-voorspelling (afhankelijk van pad-keuze)
 
-Kies één pad. Beide vereisen serverless (Fase 2). De LLM-proxy-variant (Claude als soft-prediction) is bewust uitgesloten — geen echte ML, niet gekalibreerd op Covebo.
+Kies één pad. Beide vereisen serverless (Fase 2). De LLM-proxy-variant (Claude als soft-prediction) is bewust uitgesloten — geen echte ML, niet gekalibreerd op de dummy data.
 
 - [ ] **Pad A: TabPFN-v2** via HF Inference Endpoint (~half dag)
-  - In-context learning op Covebo's historie als training-set.
+  - In-context learning op de dummy historie als training-set.
   - Geen eigen training-pipeline nodig.
   - Limiet ~10k rows / beperkt aantal features.
 - [ ] **Pad B: XGBoost** lokaal getraind, gebundled in serverless (~1 dag, productieklaar)
-  - Train op Covebo-historie, exporteer als `model.json`.
+  - Train op dummy historie, exporteer als `model.json`.
   - Standaard credit-scoring stack.
   - **Caveat:** 1 jaar historie + 1.000 actieve debiteuren is mager voor productie-grade training. Pad A is dan een zinvolle tussenstap totdat er meer data is.
 
@@ -57,9 +57,9 @@ Output velden (beide paden gelijk):
 
 ---
 
-## Buiten huidige scope — wachten op data van Covebo
+## Buiten huidige scope — wachten op extra data
 
-Geen AI ter wereld kan iets met data die er niet is. Vraag aan Covebo:
+Geen AI ter wereld kan iets met data die er niet is. Aanvullend nodig:
 
 - [ ] **Dispuut-data** uit een ander systeem aanleveren? Risico-categorie `disputen` (10% weging) blijft anders permanent leeg.
 - [ ] **Kredietverzekering-data** (limits, events, externe scores). Risico-categorie `krediet` (25% weging) blijft anders leeg.

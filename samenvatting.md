@@ -39,7 +39,7 @@ Bij elke schatting (trend, voorspelbaarheid, betaalpatroon) staat een zekerheids
 
 - **Voorspelling of een klant gaat wanbetalen.** Vraagt om een echt vooruitkijkend rekenmodel dat we nog moeten bouwen — kan niet in de browser, vereist een klein achterliggend script.
 - **Uitgebreidere uitleg per onderdeel.** Nu staan er standaardzinnetjes ("betaalt steeds later — duidelijke verslechtering over 11 maanden"). Een AI-model zou daar contextrijkere uitleg van kunnen maken.
-- **Disputen tussen ons en klanten.** Zit niet in de aangeleverde Covebo-data.
+- **Disputen tussen ons en klanten.** Zit niet in de aangeleverde dummy data.
 - **Kredietverzekering-informatie.** Zit ook niet in de aangeleverde data.
 
 **Wat dat laatste praktisch betekent voor de risico-score.** Het oorspronkelijke ontwerp van Mila bouwt de risico-score op uit vijf bouwstenen, elk met een eigen gewicht:
@@ -58,8 +58,8 @@ Drie van de vijf zijn dus gevuld; samen goed voor 65% van de oorspronkelijk bedo
 
 1. **Klein achterliggend rekenmodel opzetten** — voorwaarde voor de twee volgende punten.
 2. **Voorspelling van wanbetaling toevoegen.** Twee varianten waar we tussen kunnen kiezen:
-    - *Een bestaand statistisch model voor tabeldata.* AI-model dat speciaal is getraind om patronen in bedrijfsdata te herkennen (TabPFN is een bekende). We geven het Covebo's historie als referentiemateriaal mee; het kan dan zonder eigen training inschatten welke klanten op eerdere wanbetalers lijken. Beperkingen op hoeveelheid data tegelijk, en je bent afhankelijk van een externe partij die het model host.
-    - *Een eigen model trainen op Covebo-data.* We trainen zelf een model (XGBoost — industriestandaard in credit scoring) op Covebo's historische klanten met hun betaalgedrag. Precies afgestemd op Covebo's klantbestand, maar 1 jaar historie en ~1.000 actieve klanten is aan de magere kant — twee à drie jaar zou robuuster zijn.
+    - *Een bestaand statistisch model voor tabeldata.* AI-model dat speciaal is getraind om patronen in bedrijfsdata te herkennen (TabPFN is een bekende). We geven het de dummy historie als referentiemateriaal mee; het kan dan zonder eigen training inschatten welke klanten op eerdere wanbetalers lijken. Beperkingen op hoeveelheid data tegelijk, en je bent afhankelijk van een externe partij die het model host.
+    - *Een eigen model trainen op de dummy dataset.* We trainen zelf een model (XGBoost — industriestandaard in credit scoring) op historische klanten met hun betaalgedrag. Precies afgestemd op het klantbestand, maar 1 jaar historie en ~1.000 actieve klanten is aan de magere kant — twee à drie jaar zou robuuster zijn.
 3. **AI-gegenereerde uitleg per taak.** Maakt de detailpagina rijker zonder dat het rekenmodel hoeft te veranderen.
 
 ---
@@ -97,5 +97,5 @@ Wat we anders hadden kunnen kiezen:
 
 ### Eerlijke kanttekeningen
 
-- **Mann-Kendall heeft datapunten nodig.** Met 1 jaar Covebo-historie komen we voor veel klanten net niet aan de drempel voor "zeker" of zelfs "redelijk zeker" — vandaar dat in onze top-50 vaak "te weinig data" bij trend staat. Twee à drie jaar historie zou hier een groot verschil maken.
+- **Mann-Kendall heeft datapunten nodig.** Met 1 jaar dummy historie komen we voor veel klanten net niet aan de drempel voor "zeker" of zelfs "redelijk zeker" — vandaar dat in onze top-50 vaak "te weinig data" bij trend staat. Twee à drie jaar historie zou hier een groot verschil maken.
 - **De variatiecoëfficiënt onderscheidt geen vormen.** Een klant met veel snelle betalingen en één hele late krijgt mogelijk dezelfde uitkomst als een klant met gelijkmatig verspreide intervallen. Voor onze use case is dat acceptabel — beide willen we "wisselend" noemen — maar de variatiecoëfficiënt meet de *grootte* van de spreiding, niet de *vorm* ervan.

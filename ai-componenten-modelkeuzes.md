@@ -64,7 +64,7 @@ Naslagdocument voor de AI-onderdelen die in [mila-datamodel-spec.md](mila-datamo
 **Aanbevolen aanpak:**
 - **Coefficient of variation (CV)**: `std / mean` op de reeks van afwijkingen. Robuust en interpreteerbaar.
 - Optioneel autocorrelatie lag-1 om "piek-patroon" (wisselend extreem) te scheiden van "consistent matig laat".
-- Map CV op score 0–5 met empirische drempels op Covebo's data.
+- Map CV op score 0–5 met empirische drempels op de dummy data.
 
 **Hugging Face-alternatief:** geen passende — dit is een eenvoudige statistische maat, geen modelprobleem.
 
@@ -89,7 +89,7 @@ Naslagdocument voor de AI-onderdelen die in [mila-datamodel-spec.md](mila-datamo
 
 **Aanbevolen aanpak (productie):** XGBoost (`xgboost`) of LightGBM (`lightgbm`).
 - Twee modellen: één classifier (wel/niet wanbetaler) + één regressor (verwachte dagen vertraging).
-- Trainen op Covebo's eigen historie, calibreer kansen met Platt-scaling of isotonic.
+- Trainen op de eigen historie, calibreer kansen met Platt-scaling of isotonic.
 - Feature-importance van XGBoost geeft direct input voor de explanation-zin.
 
 **Hugging Face-alternatief (snelle baseline):**
@@ -191,7 +191,7 @@ Voor 4 AI-componenten + 1 effect-classificatie zijn dat ~10 templates per uitkom
 
 ## Aanbevolen volgorde van implementatie
 
-Voor Covebo als eerste testklant:
+Voor de eerste testklant:
 
 1. **Standaard betaaldag pattern** — deterministisch, direct te bouwen, voedt `potentieel`.
 2. **Risicoscore zonder AI-parameters** — alleen DSO, % vervallen, oudste post, % disputen, dekkingsgraad, aandeel AR. Dit is al een werkbare risicoscore.

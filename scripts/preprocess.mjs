@@ -1,4 +1,4 @@
-// Preprocess Covebo-export → src/data.generated.json
+// Preprocess dummy export → src/data.generated.json
 //
 // Leest twee geanonimiseerde JSON-bestanden, berekent deterministische
 // risicoscore + priority + standaard betaaldag-achtige metrics, en schrijft
@@ -245,7 +245,10 @@ const allFacturen = postsData.invoices.filter((i) => i['Invoicetype/Documenttype
 
 // ----- aggregaties globaal ---------------------------------------------------
 
-const openFacturenAll = allFacturen.filter((f) => num(f['Balance amount']) > 0)
+// Open posten: zowel facturen met restbedrag (> 0) als creditnota's die nog
+// niet zijn verrekend (< 0). Beide tellen mee voor het netto openstaand
+// saldo en kunnen als ze vervallen zijn in een taak terechtkomen.
+const openFacturenAll = allFacturen.filter((f) => num(f['Balance amount']) !== 0)
 const totalOpenAR = openFacturenAll.reduce((s, f) => s + num(f['Balance amount']), 0)
 // Netto-jaaromzet: ex BTW, creditnota's netto afgetrokken (geen Math.max meer).
 // Per factuur: Invoice amount − VAT amount invoice. Geldt voor zowel totaal als
@@ -267,7 +270,7 @@ for (const f of allFacturen) {
   if (!byDeb.has(k)) byDeb.set(k, { facturen: [], openFacturen: [] })
   const e = byDeb.get(k)
   e.facturen.push(f)
-  if (num(f['Balance amount']) > 0) e.openFacturen.push(f)
+  if (num(f['Balance amount']) !== 0) e.openFacturen.push(f)
 }
 
 // Netto-omzet per debiteur (ex BTW, creditnota's netto). Voor de
@@ -598,7 +601,7 @@ function debiteurScores(debNr) {
 
   // Risico — gewogen gemiddelde over beschikbare categorieën.
   // Originele wegingen: betaalgedrag 30, huidige_stand 25, disputen 10,
-  // krediet 25, omzetconcentratie 10. Disputen ontbreekt in de Covebo-data
+  // krediet 25, omzetconcentratie 10. Disputen ontbreekt in de dummy data
   // en valt uit de noemer; krediet doet altijd mee (score 1 bij geen
   // openstaand bedrag). Noemer is dus 90.
   const risicoSubs = [
@@ -693,11 +696,16 @@ for (const f of openFacturenAll) {
 }
 
 // Bouw lijst van (bedrag, taakcontext) — we gebruiken percentielen op deze
-// bedragen om impact-buckets te kalibreren op Covebo's verdeling i.p.v.
+// bedragen om impact-buckets te kalibreren op de verdeling in de dummy data i.p.v.
 // absolute % van AR.
 const taskCandidates = []
 for (const [debNr, items] of overdueByDeb.entries()) {
+  // Netto-bedrag: openstaande facturen MIN openstaande creditnota's (creditnota's
+  // hebben een negatief Balance amount, dus reduce telt ze automatisch goed).
   const totaalBedrag = items.reduce((s, x) => s + num(x.f['Balance amount']), 0)
+  // Geen taak als per saldo de creditnota's het vervallen factuurbedrag overstijgen
+  // — dan is er netto geen schuld om voor te bellen.
+  if (totaalBedrag <= 0) continue
   const oudste = items.reduce((max, x) => (x.daysOverdue > max ? x.daysOverdue : max), 0)
   taskCandidates.push({ debNr, items, totaalBedrag, oudste, taskType: 'bel_actie' })
 }
@@ -931,7 +939,7 @@ for (const i of postsData.invoices) {
 const out = {
   meta: {
     snapshot_datum: SNAPSHOT,
-    bron: 'Covebo geanonimiseerde export (jaarhistorie 2025-05-11 → 2026-05-11)',
+    bron: 'Dummy data (geanonimiseerd, jaarhistorie 2025-05-11 → 2026-05-11)',
     administratie: postsData.administration?.code || 'ADMIN001',
     total_open_ar: round(totalOpenAR, 2),
     jaaromzet_totaal: round(yearlyOmzetTotal, 2),
@@ -963,7 +971,7 @@ const out = {
     losse_betalingen_in_set: losseBetalingenOut.length,
     bedrag_buckets: bedragBuckets,
     uitgesloten_categorieen: ['disputen'],
-    uitsluitings_reden: 'Disputen ontbreken in de Covebo-export — risicoberekening genormaliseerd over de overige categorieën (betaalgedrag 30, huidige_stand 25, krediet 25, omzetconcentratie 10 = 90).',
+    uitsluitings_reden: 'Disputen ontbreken in de dummy data — risicoberekening genormaliseerd over de overige categorieën (betaalgedrag 30, huidige_stand 25, krediet 25, omzetconcentratie 10 = 90).',
   },
   tasks: topTasks,
   debiteuren,

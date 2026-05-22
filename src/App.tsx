@@ -224,24 +224,81 @@ function TrendSparkline({
         ? 'text-red-500'
         : 'text-emerald-500'
   const arrow = confidence === 'geen' ? '·' : isUp ? '↗' : '↘'
+
+  const [hover, setHover] = useState<number | null>(null)
+  const months = [
+    'jan',
+    'feb',
+    'mrt',
+    'apr',
+    'mei',
+    'jun',
+    'jul',
+    'aug',
+    'sep',
+    'okt',
+    'nov',
+    'dec',
+  ]
+  const formatMonth = (m: string) => {
+    const [yr, mo] = m.split('-')
+    const idx = parseInt(mo, 10) - 1
+    return `${months[idx] ?? mo} ${yr}`
+  }
+  const formatDso = (n: number) => {
+    if (n > 0) return `${n} dagen na vervaldatum`
+    if (n < 0) return `${Math.abs(n)} dagen vóór vervaldatum`
+    return 'op vervaldatum'
+  }
+  const active = hover != null ? points[hover] : null
+  const activeSerie = hover != null ? series[hover] : null
+  // Tooltip positioneren: links/rechts van punt afhankelijk van locatie
+  const tipLeft = active ? (active.x / width) * 100 : 0
+  const flipLeft = tipLeft > 65
   return (
-    <div className="mt-1.5">
+    <div className="mt-1.5 relative">
       <svg
         viewBox={`0 0 ${width} ${height}`}
         preserveAspectRatio="none"
         className={`w-full ${colorClass}`}
         style={{ height: `${height}px` }}
+        onMouseLeave={() => setHover(null)}
       >
-        <path
-          d={path}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.5}
-        />
+        <path d={path} fill="none" stroke="currentColor" strokeWidth={1.5} />
         {points.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r={1.5} fill="currentColor" />
+          <g key={i}>
+            <circle
+              cx={p.x}
+              cy={p.y}
+              r={hover === i ? 3 : 1.5}
+              fill="currentColor"
+            />
+            <circle
+              cx={p.x}
+              cy={p.y}
+              r={8}
+              fill="transparent"
+              onMouseEnter={() => setHover(i)}
+              style={{ cursor: 'pointer' }}
+            >
+              <title>{`${formatMonth(series[i].month)} — ${formatDso(series[i].dso)}`}</title>
+            </circle>
+          </g>
         ))}
       </svg>
+      {active && activeSerie && (
+        <div
+          className="pointer-events-none absolute z-10 -translate-y-full -translate-x-1/2 mb-1 px-2 py-1 rounded bg-slate-900 text-white text-[10px] whitespace-nowrap shadow-lg"
+          style={{
+            left: `${flipLeft ? tipLeft - 8 : tipLeft + 4}%`,
+            top: `${(active.y / height) * 100}%`,
+            transform: `translate(${flipLeft ? '-100%' : '0'}, -100%)`,
+          }}
+        >
+          <div className="font-medium">{formatMonth(activeSerie.month)}</div>
+          <div className="text-white/80">{formatDso(activeSerie.dso)}</div>
+        </div>
+      )}
       <p className="text-[10px] text-slate-400">
         {series.length} maanden · van {first}d naar {last}d{' '}
         <span className={colorClass}>{arrow}</span>
@@ -1077,7 +1134,7 @@ function tooltipRisico(task: Task): React.ReactNode {
   return (
     <ScoreTooltip
       title="Hoe risicovol"
-      description={`Gewogen gemiddelde van ${hasKrediet ? 'vier' : 'drie'} deelscores. Disputen ontbreekt in de Covebo-data en telt niet mee — de score is genormaliseerd over de wél beschikbare metrics.`}
+      description={`Gewogen gemiddelde van ${hasKrediet ? 'vier' : 'drie'} deelscores. Disputen ontbreekt in de dummy data en telt niet mee — de score is genormaliseerd over de wél beschikbare metrics.`}
       composition={
         <div className="space-y-3 mb-2">
           {bullets.length > 0 && (
@@ -1829,7 +1886,7 @@ function ComponentBlock({
 
 // Verklaring van de Risicoscore: weegt de wél beschikbare sub-scores
 // (betaalgedrag 30, huidige stand 25, krediet 25, omzetconcentratie 10).
-// Disputen ontbreekt in de Covebo-data en valt uit de noemer. Krediet
+// Disputen ontbreekt in de dummy data en valt uit de noemer. Krediet
 // doet alleen mee als de debiteur openstaand bedrag heeft (anders null).
 function RisicoBreakdown({ task, showSources }: { task: Task; showSources: boolean }) {
   const r = task.risico
@@ -2234,7 +2291,7 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         {task.risico.disputen === null && (
           <div className="border border-dashed border-slate-200 rounded-md p-4 text-xs text-slate-400 italic leading-relaxed">
             <p className="font-medium text-slate-500 not-italic mb-1">Niet beschikbaar in data</p>
-            Disputen zitten niet in de aangeleverde Covebo-data. Die categorie telt daarom niet
+            Disputen zitten niet in de aangeleverde dummy data. Die categorie telt daarom niet
             mee — de risico-score is genormaliseerd over de wél beschikbare sub-metrics.
           </div>
         )}
