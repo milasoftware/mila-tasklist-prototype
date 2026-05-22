@@ -375,8 +375,12 @@ function debiteurScores(debNr) {
   const overdue = e.openFacturen.filter((f) => f.Duedate && new Date(f.Duedate) < today)
   const overdueSum = overdue.reduce((s, f) => s + num(f['Balance amount']), 0)
   const pctOverdue = totalOpen > 0 ? overdueSum / totalOpen : 0
+  // Oudste-vervallen-leeftijd alleen over vervallen DEBET-posten (Balance > 0).
+  // Vervallen creditnota's mogen deze leeftijd niet bepalen — het is geld dat
+  // wij terug moeten geven, geen schuld die binnengehaald moet worden.
   let oldestDays = 0
   for (const f of overdue) {
+    if (num(f['Balance amount']) <= 0) continue
     const d = daysBetween(today, f.Duedate)
     if (d > oldestDays) oldestDays = d
   }
@@ -706,7 +710,13 @@ for (const [debNr, items] of overdueByDeb.entries()) {
   // Geen taak als per saldo de creditnota's het vervallen factuurbedrag overstijgen
   // — dan is er netto geen schuld om voor te bellen.
   if (totaalBedrag <= 0) continue
-  const oudste = items.reduce((max, x) => (x.daysOverdue > max ? x.daysOverdue : max), 0)
+  // Urgentie-leeftijd alleen op vervallen DEBET-posten — een oude vervallen
+  // creditnota mag de urgentie niet opdrijven.
+  const oudste = items.reduce(
+    (max, x) =>
+      num(x.f['Balance amount']) > 0 && x.daysOverdue > max ? x.daysOverdue : max,
+    0,
+  )
   taskCandidates.push({ debNr, items, totaalBedrag, oudste, taskType: 'bel_actie' })
 }
 
