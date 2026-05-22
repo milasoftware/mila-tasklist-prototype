@@ -31,6 +31,14 @@ const TOP_N = Infinity // alle gegenereerde taken meenemen
 // bewust wel de volledige historie omdat een trendsignaal lengte nodig heeft.
 const BETAALGEDRAG_WINDOW_DAYS = 365
 
+// Haalbaarheidsdrempel voor "Hoeveel sneller kan deze klant betalen?".
+// Onder deze marge gaan we ervan uit dat structurele afwijking voortkomt
+// uit proceskenmerken (wekelijkse betaalrun, intern goedkeuringstraject)
+// die met bellen niet wegtegaan zijn — dus géén realistisch DSO-potentieel.
+// Pas wanneer een klant méér dan dit aantal dagen structureel te laat is,
+// rekenen we het verschil mee als beïnvloedbare termijn.
+const DSO_HAALBAARHEIDSDREMPEL_DAGEN = 7
+
 // ----- helpers ---------------------------------------------------------------
 
 const today = new Date(SNAPSHOT)
@@ -365,6 +373,114 @@ const kredietBuckets = {
   max: round(kredietPopulatie[kredietPopulatie.length - 1] ?? 0, 2),
 }
 
+// ----- potentieel-populatie (DSO-impact in euro-dagen) ---------------------
+//
+// "Hoeveel sneller kan deze klant betalen?" meet de hoeveelheid DSO-winst
+// die je vrijspeelt als deze klant op afspraak gaat betalen, in euro-dagen
+// (= beïnvloedbare termijn × openstaand bedrag).
+//
+// Populatie = alle debiteuren met vervallen debet-saldo (= de takenlijst).
+// Klanten zonder vervallen debet komen niet in de takenlijst en hebben dus
+// geen potentieel-score nodig.
+//
+// Hybride scoring: dsoImpact = 0 → score 1 (geen actie zinvol — betaalt
+// al binnen de haalbaarheidsdrempel). dsoImpact > 0 → kwartielen P25/P50/P75
+// over die deelpopulatie → score 2/3/4/5. Score 5 vangt de echte
+// cash-conversion-cycle-winst.
+
+const median = (vals) => {
+  if (!vals.length) return null
+  const sorted = [...vals].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+}
+
+// Pre-bereken per debiteur de termDiff + dsoImpact, om de drempels te
+// kunnen leggen vóórdat debiteurScores per taak wordt aangeroepen.
+const potentieelPerDeb = new Map()
+for (const [k, e] of byDeb.entries()) {
+  const totalOpenNet = e.openFacturen.reduce((s, f) => s + num(f['Balance amount']), 0)
+  if (totalOpenNet <= 0) continue
+  const hasOverdueDebet = e.openFacturen.some(
+    (f) => f.Duedate && new Date(f.Duedate) < today && num(f['Balance amount']) > 0,
+  )
+  const agreedTerms = e.facturen
+    .filter((f) => f.Invoicedate && f.Duedate)
+    .map((f) => daysBetween(f.Duedate, f.Invoicedate))
+    .filter((d) => d >= 0 && d <= 365)
+  const paidFacs = e.facturen.filter(
+    (f) =>
+      f.payments &&
+      f.payments.length > 0 &&
+      num(f['Balance amount']) === 0 &&
+      f.Duedate &&
+      f.Invoicedate,
+  )
+  const actualTerms = paidFacs
+    .map((f) => {
+      const lastPay = f.payments.reduce((max, p) => (p.date > max ? p.date : max), '')
+      return daysBetween(lastPay, f.Invoicedate)
+    })
+    .filter((d) => d >= 0 && d <= 730)
+  const medianAgreed = agreedTerms.length ? Math.round(median(agreedTerms)) : 30
+  const medianActual = actualTerms.length ? Math.round(median(actualTerms)) : medianAgreed
+  const termDiff = medianActual - medianAgreed
+  const beinvloedbareDagen = Math.max(0, termDiff - DSO_HAALBAARHEIDSDREMPEL_DAGEN)
+  const dsoImpact = beinvloedbareDagen * totalOpenNet
+  potentieelPerDeb.set(k, {
+    medianAgreed,
+    medianActual,
+    termDiff,
+    totalOpenNet,
+    hasOverdueDebet,
+    beinvloedbareDagen,
+    dsoImpact,
+    paidCount: paidFacs.length,
+  })
+}
+
+// Kwartielen op dsoImpact > 0, alleen over debiteuren met vervallen debet
+// (= populatie B / de takenlijst). Anderen zijn niet relevant voor scoring.
+const potentieelPopulatie = [...potentieelPerDeb.values()]
+  .filter((d) => d.hasOverdueDebet && d.dsoImpact > 0)
+  .map((d) => d.dsoImpact)
+  .sort((a, b) => a - b)
+
+function quartile(arr, q) {
+  if (arr.length === 0) return 0
+  return arr[Math.floor(q * (arr.length - 1))]
+}
+const POT_P25 = quartile(potentieelPopulatie, 0.25)
+const POT_P50 = quartile(potentieelPopulatie, 0.5)
+const POT_P75 = quartile(potentieelPopulatie, 0.75)
+console.log(
+  `  Potentieel-drempels DSO-impact (P25/P50/P75): ${Math.round(POT_P25).toLocaleString('nl-NL')} / ${Math.round(POT_P50).toLocaleString('nl-NL')} / ${Math.round(POT_P75).toLocaleString('nl-NL')} euro-dagen`,
+)
+
+// Score-toekenning en bucket-counts (populatie B = alleen vervallen-debet).
+function potentieelScoreFor(dsoImpact) {
+  if (dsoImpact <= 0) return 1
+  if (dsoImpact < POT_P25) return 2
+  if (dsoImpact < POT_P50) return 3
+  if (dsoImpact < POT_P75) return 4
+  return 5
+}
+const potBucketCounts = [0, 0, 0, 0, 0]
+let potPopulatieB = 0
+for (const d of potentieelPerDeb.values()) {
+  if (!d.hasOverdueDebet) continue
+  potPopulatieB++
+  potBucketCounts[potentieelScoreFor(d.dsoImpact) - 1]++
+}
+const potentieelBuckets = {
+  thresholds: [0, round(POT_P25, 0), round(POT_P50, 0), round(POT_P75, 0)],
+  counts: potBucketCounts,
+  min: round(potentieelPopulatie[0] ?? 0, 0),
+  max: round(potentieelPopulatie[potentieelPopulatie.length - 1] ?? 0, 0),
+  populatie_debiteuren: potPopulatieB,
+  haalbaarheidsdrempel_dagen: DSO_HAALBAARHEIDSDREMPEL_DAGEN,
+}
+
 function debiteurScores(debNr) {
   const e = byDeb.get(debNr)
   if (!e) return null
@@ -551,36 +667,16 @@ function debiteurScores(debNr) {
   else if (debiteurOmzet < OMZET_P80) omzetconcentratie = 4
   else omzetconcentratie = 5
 
-  // Werkelijke vs afgesproken termijn — beide als mediaan, identieke
-  // robuustheidsafweging als de DSO-mediaan: één rare factuur (dispuut,
-  // verloren post) hoort de typische termijn niet te bepalen.
-  const median = (vals) => {
-    if (!vals.length) return null
-    const sorted = [...vals].sort((a, b) => a - b)
-    const mid = Math.floor(sorted.length / 2)
-    return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
-  }
-  const agreedTerms = e.facturen
-    .filter((f) => f.Invoicedate && f.Duedate)
-    .map((f) => daysBetween(f.Duedate, f.Invoicedate))
-    .filter((d) => d >= 0 && d <= 365)
-  const medianAgreed = agreedTerms.length ? Math.round(median(agreedTerms)) : 30
-  const actualTerms = paid
-    .filter((f) => f.Invoicedate)
-    .map((f) => {
-      const lastPay = f.payments.reduce((max, p) => (p.date > max ? p.date : max), '')
-      return daysBetween(lastPay, f.Invoicedate)
-    })
-    .filter((d) => d >= 0 && d <= 730)
-  const medianActual = actualTerms.length ? Math.round(median(actualTerms)) : medianAgreed
-  const termDiff = medianActual - medianAgreed
-  let potentieel
-  if (termDiff <= 0) potentieel = 0
-  else if (termDiff <= 10) potentieel = 1
-  else if (termDiff <= 30) potentieel = 2
-  else if (termDiff <= 60) potentieel = 3
-  else if (termDiff <= 90) potentieel = 4
-  else potentieel = 5
+  // Werkelijke vs afgesproken termijn + DSO-impact zijn al pre-berekend
+  // in `potentieelPerDeb` (we hadden de drempels nodig vóórdat we de score
+  // per debiteur kunnen toekennen). Hier alleen de score-toekenning.
+  const potData = potentieelPerDeb.get(debNr)
+  const medianAgreed = potData?.medianAgreed ?? 30
+  const medianActual = potData?.medianActual ?? medianAgreed
+  const termDiff = potData?.termDiff ?? 0
+  const beinvloedbareDagen = potData?.beinvloedbareDagen ?? 0
+  const dsoImpact = potData?.dsoImpact ?? 0
+  const potentieel = potentieelScoreFor(dsoImpact)
 
   // Krediet — onverzekerd bedrag (openstaand − CreditInformationCreditlimit).
   // Sub 1: onverzekerd % via vaste drempels (1-5). Sub 2: onverzekerd in €
@@ -642,6 +738,8 @@ function debiteurScores(debNr) {
     debiteurOmzet: round(debiteurOmzet, 2),
     medianAgreed,
     medianActual,
+    beinvloedbareDagen,
+    dsoImpact,
     potentieel,
     dsoCount: dsoVals.length,
     paidCount: paid.length,
@@ -849,6 +947,10 @@ for (const c of taskCandidates) {
       score: scores.potentieel,
       werkelijke_dagen: scores.medianActual,
       afgesproken_dagen: scores.medianAgreed,
+      term_diff_dagen: scores.medianActual - scores.medianAgreed,
+      beinvloedbare_dagen: scores.beinvloedbareDagen,
+      dso_impact_euro_dagen: round(scores.dsoImpact, 0),
+      haalbaarheidsdrempel_dagen: DSO_HAALBAARHEIDSDREMPEL_DAGEN,
       reden:
         scores.dsoCount > 0
           ? `Werkelijke termijn ${scores.medianActual}d vs afgesproken ${scores.medianAgreed}d, mediaan over ${scores.dsoCount} volledig betaalde facturen.`
@@ -974,6 +1076,7 @@ const out = {
     },
     krediet_buckets: kredietBuckets,
     krediet_populatie_debiteuren: kredietPopulatie.length,
+    potentieel_buckets: potentieelBuckets,
     total_facturen: allFacturen.length,
     total_open_facturen: openFacturenAll.length,
     total_taken_gegenereerd: tasks.length,

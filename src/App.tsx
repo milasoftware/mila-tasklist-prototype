@@ -391,66 +391,60 @@ function UrgentieThermometer({ days, score }: { days: number; score: number }) {
   )
 }
 
-// Vergelijking van afgesproken vs. werkelijke betaaltermijn op één
-// tijdlijn-balk. Groen stipje = afgesproken moment, oranje streepje =
-// werkelijk moment. Het stuk tussen beide markers is oranje gearceerd
-// zodat de overschrijding meteen opvalt.
-function PotentieelComparison({
-  afgesproken,
-  werkelijk,
+// Kwartielen-balk voor "Hoeveel sneller kan deze klant betalen". Werkt
+// hetzelfde als PercentilesBar voor impact, maar dan met 5 buckets waarbij
+// score 1 = "binnen marge, geen DSO-winst" (impact 0) en 2-5 kwartielen
+// op euro-dagen.
+function PotentieelImpactBar({
+  activeScore,
+  dsoImpact,
 }: {
-  afgesproken: number
-  werkelijk: number
+  activeScore: number
+  dsoImpact: number
 }) {
-  // Schaalwaarde: ruim genoeg om beide markers comfortabel te tonen
-  const max = Math.max(werkelijk, afgesproken * 1.5, 30)
-  const pctA = (afgesproken / max) * 100
-  const pctW = (werkelijk / max) * 100
-  const diff = werkelijk - afgesproken
-  const teLaat = diff > 0
-
+  const pb = meta.potentieel_buckets
+  if (!pb) return null
+  const respijt = pb.haalbaarheidsdrempel_dagen
+  const fmtED = (n: number) => Math.round(n).toLocaleString('nl-NL')
+  const ranges = [
+    `binnen ${respijt}d marge`,
+    `< ${fmtED(pb.thresholds[1])}`,
+    `${fmtED(pb.thresholds[1])} – ${fmtED(pb.thresholds[2])}`,
+    `${fmtED(pb.thresholds[2])} – ${fmtED(pb.thresholds[3])}`,
+    `≥ ${fmtED(pb.thresholds[3])}`,
+  ]
   return (
-    <div className="mt-2">
-      <div className="relative h-4">
-        {/* Track */}
-        <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1.5 bg-slate-100 rounded-full" />
-
-        {/* Gearceerd segment tussen afgesproken en werkelijk (alleen als te laat) */}
-        {teLaat && (
-          <div
-            className="absolute top-1/2 -translate-y-1/2 h-1.5 bg-orange-200"
-            style={{ left: `${pctA}%`, width: `${pctW - pctA}%` }}
-          />
-        )}
-
-        {/* Afgesproken: groen stipje */}
-        <div
-          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-emerald-500 border-2 border-white shadow-sm"
-          style={{ left: `${pctA}%` }}
-          title={`Afgesproken: ${afgesproken} dagen`}
-        />
-
-        {/* Werkelijk: oranje verticale streep */}
-        <div
-          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-1 h-4 bg-orange-500 rounded-sm"
-          style={{ left: `${pctW}%` }}
-          title={`Werkelijk: ${werkelijk} dagen`}
-        />
-      </div>
-
-      {/* Legenda met waardes */}
-      <div className="flex items-center gap-4 mt-2 text-[10px] text-slate-500">
-        <span className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
-          Afgesproken{' '}
-          <span className="tabular-nums text-slate-700 font-medium">{afgesproken}d</span>
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-0.5 h-2.5 bg-orange-500 inline-block" />
-          Werkelijk{' '}
-          <span className="tabular-nums text-slate-700 font-medium">{werkelijk}d</span>
-        </span>
-        {teLaat && <span className="text-orange-600 ml-auto">+{diff}d langer</span>}
+    <div className="mt-3 mb-1">
+      <p className="text-[11px] text-slate-500 mb-1.5">
+        Alle {pb.populatie_debiteuren} debiteuren met vervallen saldo verdeeld in vijf groepen
+        op basis van DSO-winst (euro-dagen) — deze klant levert{' '}
+        {Math.round(dsoImpact).toLocaleString('nl-NL')} euro-dagen op en zit in groep{' '}
+        {activeScore}.
+      </p>
+      <div className="grid grid-cols-5 gap-1">
+        {[1, 2, 3, 4, 5].map((seg) => {
+          const active = seg === activeScore
+          return (
+            <div
+              key={seg}
+              className={`p-2 rounded text-[10px] text-center ring-1 ${
+                active
+                  ? 'bg-slate-900 text-white ring-slate-900'
+                  : 'bg-slate-50 text-slate-500 ring-slate-200'
+              }`}
+            >
+              <div className={`font-medium ${active ? 'text-white' : 'text-slate-700'}`}>
+                Groep {seg}
+              </div>
+              <div className="mt-1 tabular-nums leading-tight">{ranges[seg - 1]}</div>
+              <div
+                className={`mt-1 tabular-nums ${active ? 'text-white/80' : 'text-slate-400'}`}
+              >
+                {pb.counts[seg - 1]} debiteuren
+              </div>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -1040,24 +1034,33 @@ function tooltipUrgentie(score: number, dagenVervallen: number | undefined): Rea
 
 function tooltipPotentieel(
   score: number,
-  werkelijk: number,
-  afgesproken: number,
+  dsoImpact: number | undefined,
+  beinvloedbareDagen: number | undefined,
+  totalOpen: number | undefined,
 ): React.ReactNode {
-  const diff = werkelijk - afgesproken
+  const pb = meta.potentieel_buckets
+  const respijt = pb?.haalbaarheidsdrempel_dagen ?? 7
+  const popN = pb?.populatie_debiteuren ?? 0
+  const t = pb?.thresholds ?? [0, 0, 0, 0]
+  const fmtED = (n: number) =>
+    `${Math.round(n).toLocaleString('nl-NL')} euro-dagen`
+  const currentTxt =
+    dsoImpact !== undefined && beinvloedbareDagen !== undefined && totalOpen !== undefined
+      ? `${beinvloedbareDagen}d beïnvloedbaar × ${fmtEUR(totalOpen)} = ${fmtED(dsoImpact)} → score ${score}`
+      : undefined
   return (
     <ScoreTooltip
-      title="Hoeveel sneller mogelijk"
-      description="Score op basis van het verschil tussen wat er afgesproken is en wat er werkelijk gebeurt — mediaan over alle betaalde facturen van deze klant (robuust tegen uitschieters)."
+      title="Hoeveel sneller kan deze klant betalen"
+      description={`DSO-winst die vrijspeelt als deze klant op afspraak gaat betalen: beïnvloedbare termijn (mediaan vertraging boven ${respijt} dagen respijt) × openstaand bedrag. Vergeleken met alle ${popN} debiteuren met vervallen saldo, verdeeld in vier kwartielen op DSO-impact > 0.`}
       thresholds={[
-        { score: 0, label: 'binnen afspraak (geen ruimte)' },
-        { score: 1, label: '1 – 10 dagen langer' },
-        { score: 2, label: '11 – 30 dagen langer' },
-        { score: 3, label: '31 – 60 dagen langer' },
-        { score: 4, label: '61 – 90 dagen langer' },
-        { score: 5, label: '> 90 dagen langer' },
+        { score: 1, label: `0 euro-dagen (binnen ${respijt}d marge — geen DSO-winst)` },
+        { score: 2, label: `< ${fmtED(t[1])}` },
+        { score: 3, label: `${fmtED(t[1])} – ${fmtED(t[2])}` },
+        { score: 4, label: `${fmtED(t[2])} – ${fmtED(t[3])}` },
+        { score: 5, label: `≥ ${fmtED(t[3])}` },
       ]}
       activeScore={score}
-      current={`Werkelijk ${werkelijk}d vs. afgesproken ${afgesproken}d = ${diff > 0 ? '+' : ''}${diff}d → score ${score}`}
+      current={currentTxt}
     />
   )
 }
@@ -2051,21 +2054,51 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           score={task.potentieel.score}
           tooltip={tooltipPotentieel(
             task.potentieel.score,
-            task.potentieel.werkelijke_dagen,
-            task.potentieel.afgesproken_dagen,
+            task.potentieel.dso_impact_euro_dagen,
+            task.potentieel.beinvloedbare_dagen,
+            task.risico.krediet_openstaand,
           )}
         >
-          <p className="text-slate-600">
-            Deze klant betaalt normaal {task.potentieel.werkelijke_dagen} dagen na de factuurdatum.
-            Afgesproken is {task.potentieel.afgesproken_dagen} dagen — dus{' '}
-            <span className="font-medium text-slate-800">
-              {task.potentieel.werkelijke_dagen - task.potentieel.afgesproken_dagen} dagen langer
-            </span>{' '}
-            dan de afspraak.
-          </p>
-          <PotentieelComparison
-            afgesproken={task.potentieel.afgesproken_dagen}
-            werkelijk={task.potentieel.werkelijke_dagen}
+          {(() => {
+            const respijt = task.potentieel.haalbaarheidsdrempel_dagen ?? 7
+            const td = task.potentieel.term_diff_dagen ?? 0
+            const beinvl = task.potentieel.beinvloedbare_dagen ?? 0
+            const impact = task.potentieel.dso_impact_euro_dagen ?? 0
+            const totalOpen = task.risico.krediet_openstaand
+            return (
+              <p className="text-slate-600">
+                Deze klant betaalt normaal {task.potentieel.werkelijke_dagen} dagen na de
+                factuurdatum, afgesproken is {task.potentieel.afgesproken_dagen} dagen
+                {td > 0 ? (
+                  <>
+                    {' '}— dus{' '}
+                    <span className="font-medium text-slate-800">{td} dagen langer</span> dan de
+                    afspraak.
+                  </>
+                ) : (
+                  <> — dat past binnen de afspraak.</>
+                )}{' '}
+                {beinvl > 0 && totalOpen !== undefined ? (
+                  <>
+                    Boven de {respijt}d marge: <span className="font-medium">{beinvl}d</span>{' '}
+                    beïnvloedbaar × {fmtEUR(totalOpen)} openstaand ={' '}
+                    <span className="font-medium text-slate-800">
+                      {Math.round(impact).toLocaleString('nl-NL')} euro-dagen
+                    </span>{' '}
+                    DSO-winst.
+                  </>
+                ) : (
+                  <>
+                    Binnen de {respijt}d marge — bellen levert structureel geen DSO-winst op
+                    (gedrag is mogelijk procesgebonden).
+                  </>
+                )}
+              </p>
+            )
+          })()}
+          <PotentieelImpactBar
+            activeScore={task.potentieel.score}
+            dsoImpact={task.potentieel.dso_impact_euro_dagen ?? 0}
           />
           {task.potentieel.pattern && (
             <div className="pt-2 border-t border-slate-100 mt-2">

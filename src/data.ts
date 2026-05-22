@@ -76,6 +76,10 @@ export type Task = {
     score: number
     werkelijke_dagen: number
     afgesproken_dagen: number
+    term_diff_dagen?: number
+    beinvloedbare_dagen?: number
+    dso_impact_euro_dagen?: number
+    haalbaarheidsdrempel_dagen?: number
     reden: string
     pattern?: PatternInfo
   }
@@ -197,6 +201,14 @@ export type Meta = {
     max: number
   }
   krediet_populatie_debiteuren?: number
+  potentieel_buckets?: {
+    thresholds: number[] // [0, P25, P50, P75] op dsoImpact > 0 (euro-dagen)
+    counts: number[] // 5 items: score 1..5
+    min: number
+    max: number
+    populatie_debiteuren: number // alleen debiteuren met vervallen debet
+    haalbaarheidsdrempel_dagen: number
+  }
   total_facturen: number
   total_open_facturen: number
   total_taken_gegenereerd: number
