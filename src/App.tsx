@@ -1005,39 +1005,129 @@ function tooltipPotentieel(
   )
 }
 
+function risicoBullets(task: Task): string[] {
+  const r = task.risico
+  const bullets: string[] = []
+
+  if (r.betaalgedrag_breakdown) {
+    const dso = r.betaalgedrag_breakdown.dso.median_days_late
+    if (dso < 0) bullets.push(`Betaalt gemiddeld ${Math.abs(dso)} dagen vóór de vervaldatum.`)
+    else if (dso === 0) bullets.push('Betaalt gemiddeld op de vervaldatum.')
+    else bullets.push(`Betaalt gemiddeld ${dso} dagen na de vervaldatum.`)
+
+    const trend = r.betaalgedrag_breakdown.trend
+    if (trend.confidence !== 'geen' && trend.score != null) {
+      if (trend.score >= 4) bullets.push('Betaalgedrag verslechtert — betaalt steeds later.')
+      else if (trend.score <= 2) bullets.push('Betaalgedrag verbetert — betaalt steeds eerder.')
+    }
+
+    const vol = r.betaalgedrag_breakdown.volatiliteit
+    if (vol.confidence !== 'geen' && vol.score != null && vol.score >= 4) {
+      bullets.push('Betaalt grillig — moeilijk te voorspellen wanneer betaald wordt.')
+    }
+  }
+
+  if (r.huidige_stand_pct_vervallen !== undefined && r.huidige_stand_pct_vervallen > 0) {
+    const pct = Math.round(r.huidige_stand_pct_vervallen)
+    const oudste = r.huidige_stand_oudste_dagen
+    bullets.push(
+      `${pct}% van openstaand bedrag is vervallen${oudste ? ` (oudste post ${oudste} dagen)` : ''}.`,
+    )
+  }
+
+  if (r.krediet != null) {
+    const pct = Math.round(r.krediet_onverzekerd_pct ?? 0)
+    const bedrag = r.krediet_onverzekerd_bedrag ?? 0
+    if (r.krediet >= 4) {
+      bullets.push(`Kredietrisico hoog — ${pct}% onverzekerd (${fmtEUR(bedrag)}).`)
+    } else if (r.krediet >= 3) {
+      bullets.push(`Kredietrisico gemiddeld — ${pct}% onverzekerd.`)
+    } else if (r.krediet >= 2) {
+      bullets.push(`Kredietrisico beperkt — ${pct}% onverzekerd.`)
+    } else {
+      bullets.push('Kredietrisico laag — openstaand bedrag binnen de limiet.')
+    }
+  }
+
+  if (r.omzetconcentratie != null) {
+    const pct = r.omzetconcentratie_pct
+    const pctTxt = pct != null ? ` (${pct.toFixed(1)}% van jaaromzet)` : ''
+    if (r.omzetconcentratie >= 5) bullets.push(`Zeer belangrijke klant — top 20% in netto-omzet${pctTxt}.`)
+    else if (r.omzetconcentratie >= 4) bullets.push(`Belangrijke klant qua omzet${pctTxt}.`)
+    else if (r.omzetconcentratie <= 2) bullets.push(`Beperkte omzetbijdrage${pctTxt}.`)
+  }
+
+  return bullets
+}
+
 function tooltipRisico(task: Task): React.ReactNode {
   const bg = task.risico.betaalgedrag
   const hs = task.risico.huidige_stand
+  const kr = task.risico.krediet
   const oc = task.risico.omzetconcentratie
+  const hasKrediet = kr != null
+  const noemer = 30 + 25 + (hasKrediet ? 25 : 0) + 10
+  const bullets = risicoBullets(task)
   return (
     <ScoreTooltip
       title="Hoe risicovol"
-      description="Gewogen gemiddelde van drie deelscores. Disputen en kredietverzekering ontbreken in de Covebo-data en tellen niet mee — de score is genormaliseerd over de drie wél beschikbare metrics."
+      description={`Gewogen gemiddelde van ${hasKrediet ? 'vier' : 'drie'} deelscores. Disputen ontbreekt in de Covebo-data en telt niet mee — de score is genormaliseerd over de wél beschikbare metrics.`}
       composition={
-        <table className="w-full text-[11px] tabular-nums mb-2">
-          <tbody className="text-white/80">
-            <tr>
-              <td className="pr-2 py-0.5">Betaalgedrag</td>
-              <td className="text-right pr-1">{fmtNL(bg, 1)}</td>
-              <td className="text-white/50 pl-1">× 30/65</td>
-            </tr>
-            <tr>
-              <td className="pr-2 py-0.5">Huidige stand</td>
-              <td className="text-right pr-1">{fmtNL(hs, 1)}</td>
-              <td className="text-white/50 pl-1">× 25/65</td>
-            </tr>
-            <tr>
-              <td className="pr-2 py-0.5">Omzetconcentratie</td>
-              <td className="text-right pr-1">{fmtNL(oc, 0)}</td>
-              <td className="text-white/50 pl-1">× 10/65</td>
-            </tr>
-            <tr className="border-t border-white/20">
-              <td className="font-medium pt-1">Risico-score</td>
-              <td className="text-right font-semibold pt-1 pr-1">{fmtNL(task.risico.score, 2)}</td>
-              <td></td>
-            </tr>
-          </tbody>
-        </table>
+        <div className="space-y-3 mb-2">
+          {bullets.length > 0 && (
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-white/50 mb-1">
+                Samenvatting
+              </p>
+              <ul className="space-y-0.5 text-[11px] text-white/85">
+                {bullets.map((b, i) => (
+                  <li key={i} className="flex gap-1.5">
+                    <span className="text-white/40">•</span>
+                    <span>{b}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-white/50 mb-1">
+              Opbouw score
+            </p>
+            <table className="w-full text-[11px] tabular-nums">
+              <tbody className="text-white/80">
+                <tr>
+                  <td className="pr-2 py-0.5">Betaalgedrag</td>
+                  <td className="text-right pr-1">{fmtNL(bg, 1)}</td>
+                  <td className="text-white/50 pl-1">× 30/{noemer}</td>
+                </tr>
+                <tr>
+                  <td className="pr-2 py-0.5">Huidige stand</td>
+                  <td className="text-right pr-1">{fmtNL(hs, 1)}</td>
+                  <td className="text-white/50 pl-1">× 25/{noemer}</td>
+                </tr>
+                {hasKrediet && (
+                  <tr>
+                    <td className="pr-2 py-0.5">Kredietrisico</td>
+                    <td className="text-right pr-1">{fmtNL(kr, 1)}</td>
+                    <td className="text-white/50 pl-1">× 25/{noemer}</td>
+                  </tr>
+                )}
+                <tr>
+                  <td className="pr-2 py-0.5">Omzetconcentratie</td>
+                  <td className="text-right pr-1">{fmtNL(oc, 0)}</td>
+                  <td className="text-white/50 pl-1">× 10/{noemer}</td>
+                </tr>
+                <tr className="border-t border-white/20">
+                  <td className="font-medium pt-1">Risico-score</td>
+                  <td className="text-right font-semibold pt-1 pr-1">
+                    {fmtNL(task.risico.score, 2)}
+                  </td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       }
     />
   )
