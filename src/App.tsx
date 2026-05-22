@@ -2270,25 +2270,76 @@ function ListView({
   setShowSources: (b: boolean) => void
   onSelectTask: (id: string) => void
 }) {
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
+  const filtered = q
+    ? sorted.filter((t) => {
+        const nr = (t.debiteurnummer ?? '').toLowerCase()
+        const naam = (t.debiteur ?? '').toLowerCase()
+        return nr.includes(q) || naam.includes(q)
+      })
+    : sorted
   return (
     <>
       <AppHeader
         showSources={showSources}
         setShowSources={setShowSources}
         rightSlot={
-          <p className="text-sm text-slate-500 tabular-nums">{sorted.length} taken</p>
+          <p className="text-sm text-slate-500 tabular-nums">
+            {q ? `${filtered.length} van ${sorted.length} taken` : `${sorted.length} taken`}
+          </p>
         }
       />
       <main className="max-w-5xl mx-auto px-6 py-6">
+        <div className="mb-4 relative">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+            aria-hidden
+          >
+            <circle cx="11" cy="11" r="7" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Zoek op debiteurnummer of naam…"
+            className="w-full pl-9 pr-9 py-2 text-sm rounded-md border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-slate-300 focus:border-slate-300"
+            aria-label="Zoek in takenlijst"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center text-slate-400 hover:text-slate-700"
+              aria-label="Zoekopdracht wissen"
+            >
+              ×
+            </button>
+          )}
+        </div>
         <div className="bg-white rounded-md border border-slate-200 overflow-hidden">
-          {sorted.map((task) => (
-            <TaskRow
-              key={task.id}
-              task={task}
-              selected={false}
-              onClick={() => onSelectTask(task.id)}
-            />
-          ))}
+          {filtered.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-slate-500 text-center">
+              Geen taken gevonden voor &ldquo;{query}&rdquo;.
+            </p>
+          ) : (
+            filtered.map((task) => (
+              <TaskRow
+                key={task.id}
+                task={task}
+                selected={false}
+                onClick={() => onSelectTask(task.id)}
+              />
+            ))
+          )}
         </div>
       </main>
     </>

@@ -653,12 +653,9 @@ function debiteurScores(debNr) {
 
 // ----- taken genereren -------------------------------------------------------
 //
-// Pad B-aanpak: groepering op debiteurniveau voor actieve taken.
-// - 1 escalatie- óf bel_actie-taak per debiteur (afhankelijk van zwaarste
-//   factuur), met ALLE 14+d vervallen facturen van die debiteur in de
-//   onderliggende stack.
-// - Herinneringen blijven per factuur (1-13d vervallen) — die zijn routine
-//   en niet altijd per debiteur te bundelen.
+// 1 bel_actie-taak per debiteur met vervallen saldo. Alle vervallen facturen
+// (≥1d) van die debiteur worden samengevoegd in één taak. Debiteuren zonder
+// vervallen saldo krijgen geen taak.
 
 function urgentieScore(daysOverdue) {
   if (daysOverdue >= 60) return 5
@@ -668,45 +665,24 @@ function urgentieScore(daysOverdue) {
   return 1
 }
 
-// Eerst: per debiteur de open vervallen facturen groeperen
 const overdueByDeb = new Map()
-const herinneringFacturen = []
 for (const f of openFacturenAll) {
   if (!f.Duedate) continue
   const daysOverdue = daysBetween(today, f.Duedate)
   if (daysOverdue <= 0) continue
   const debNr = f.Debtornumber
-  if (daysOverdue < 14) {
-    herinneringFacturen.push({ f, daysOverdue })
-  } else {
-    if (!overdueByDeb.has(debNr)) overdueByDeb.set(debNr, [])
-    overdueByDeb.get(debNr).push({ f, daysOverdue })
-  }
+  if (!overdueByDeb.has(debNr)) overdueByDeb.set(debNr, [])
+  overdueByDeb.get(debNr).push({ f, daysOverdue })
 }
 
 // Bouw lijst van (bedrag, taakcontext) — we gebruiken percentielen op deze
 // bedragen om impact-buckets te kalibreren op Covebo's verdeling i.p.v.
 // absolute % van AR.
 const taskCandidates = []
-
-// Grouped tasks (escalatie of bel_actie) per debiteur
 for (const [debNr, items] of overdueByDeb.entries()) {
   const totaalBedrag = items.reduce((s, x) => s + num(x.f['Balance amount']), 0)
   const oudste = items.reduce((max, x) => (x.daysOverdue > max ? x.daysOverdue : max), 0)
-  const taskType = 'bel_actie'
-  taskCandidates.push({ kind: 'grouped', debNr, items, totaalBedrag, oudste, taskType })
-}
-
-// Per-factuur herinneringen
-for (const { f, daysOverdue } of herinneringFacturen) {
-  taskCandidates.push({
-    kind: 'reminder',
-    debNr: f.Debtornumber,
-    items: [{ f, daysOverdue }],
-    totaalBedrag: num(f['Balance amount']),
-    oudste: daysOverdue,
-    taskType: 'bel_actie',
-  })
+  taskCandidates.push({ debNr, items, totaalBedrag, oudste, taskType: 'bel_actie' })
 }
 
 // Bedrag-percentielen over alle taakkandidaten
@@ -769,25 +745,15 @@ for (const c of taskCandidates) {
 
   // Totaal openstaand voor deze debiteur (incl. niet-vervallen posten)
   const debTotaalOpen = scores.totalOpen
-  let omschrijving, aanleiding, factuurnummerVoorTaak
-  omschrijving =
-    debTotaalOpen > c.totaalBedrag + 0.01
-      ? `Vervallen ${formatEUR(c.totaalBedrag)} · totaal open ${formatEUR(debTotaalOpen)}`
-      : `Totaal openstaand: ${formatEUR(c.totaalBedrag)}`
-  if (c.kind === 'grouped') {
-    aanleiding =
-      factuurCount === 1
-        ? `Factuur ${c.oudste}d vervallen`
-        : `${factuurCount} facturen vervallen, oudste ${c.oudste}d`
-    factuurnummerVoorTaak = undefined // niet één enkele factuur — debiteur-niveau
-  } else {
-    const f = c.items[0].f
-    aanleiding = `Factuur ${c.oudste}d vervallen`
-    factuurnummerVoorTaak = f.Invoicenumber
-  }
+  const omschrijving = `Vervallen ${formatEUR(c.totaalBedrag)} · totaal open ${formatEUR(debTotaalOpen)}`
+  const aanleiding =
+    factuurCount === 1
+      ? `Factuur ${c.oudste}d vervallen`
+      : `${factuurCount} facturen vervallen, oudste ${c.oudste}d`
+  const factuurnummerVoorTaak = factuurCount === 1 ? c.items[0].f.Invoicenumber : undefined
 
   tasks.push({
-    id: c.kind === 'grouped' ? `t_grp_${c.debNr}` : `t_${c.items[0].f.Invoicenumber}`,
+    id: `t_grp_${c.debNr}`,
     debiteur: debInfo?.Debtorname || c.debNr,
     debiteurnummer: c.debNr,
     type: c.taskType,
@@ -807,7 +773,7 @@ for (const c of taskCandidates) {
       bedrag_rank: rankByCandidate.get(c),
       bedrag_total_tasks: totalTaskCount,
       explanation:
-        c.kind === 'grouped' && factuurCount > 1
+        factuurCount > 1
           ? `${formatEUR(c.totaalBedrag)} verspreid over ${factuurCount} facturen (${round((c.totaalBedrag / totalOpenAR) * 100, 2)}% van AR) — directe cash bij betaling. Bedrag-score ${bedragScore} (p80=${formatEUR(P80)}), effect-score ${effectScore}.`
           : `${formatEUR(c.totaalBedrag)} (${round((c.totaalBedrag / totalOpenAR) * 100, 2)}% van AR) — directe cash bij betaling. Bedrag-score ${bedragScore}, effect-score ${effectScore}.`,
     },
@@ -815,7 +781,7 @@ for (const c of taskCandidates) {
       score: urgentie,
       dagen_vervallen: c.oudste,
       reden:
-        c.kind === 'grouped' && factuurCount > 1
+        factuurCount > 1
           ? `Oudste factuur ${c.oudste}d vervallen — over ${factuurCount} posten.`
           : `Factuur ${c.oudste}d vervallen (vervaldatum ${c.items[0].f.Duedate}).`,
     },
