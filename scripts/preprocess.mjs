@@ -366,6 +366,18 @@ function debiteurScores(debNr) {
   const e = byDeb.get(debNr)
   if (!e) return null
 
+  // Vervallen posten — pre-bereken oudste-vervallen-dagen omdat de DSO-score
+  // hierop terugvalt wanneer er geen betaalhistorie beschikbaar is.
+  const totalOpen = e.openFacturen.reduce((s, f) => s + num(f['Balance amount']), 0)
+  const overdue = e.openFacturen.filter((f) => f.Duedate && new Date(f.Duedate) < today)
+  const overdueSum = overdue.reduce((s, f) => s + num(f['Balance amount']), 0)
+  const pctOverdue = totalOpen > 0 ? overdueSum / totalOpen : 0
+  let oldestDays = 0
+  for (const f of overdue) {
+    const d = daysBetween(today, f.Duedate)
+    if (d > oldestDays) oldestDays = d
+  }
+
   // DSO — mediaan dagen-te-laat op volledig betaalde facturen.
   // Alle betaalde facturen blijven beschikbaar voor andere berekeningen
   // (trend, omzet, termijnen). Voor de DSO-mediaan zelf kijken we alleen
@@ -393,8 +405,18 @@ function debiteurScores(debNr) {
       sortedVals.length % 2 === 0 ? (sortedVals[mid - 1] + sortedVals[mid]) / 2 : sortedVals[mid]
   }
 
+  // DSO-score met edge-case-regel:
+  // Wanneer er geen betaalhistorie is in het 12-maands venster (dsoVals leeg)
+  // en er staat tenminste één vervallen post open, zou de gewone mediaan
+  // (default 0) ten onrechte score 1 ("op tijd") opleveren. We vallen terug
+  // op de leeftijd van de oudste vervallen post: ≤ 5 dagen geeft een
+  // grace-period score 2, > 5 dagen springt direct naar 5 (rood vlaggetje).
   let dsoScore
-  if (medianDaysLate <= 0) dsoScore = 1
+  let dsoFromOverdue = false
+  if (dsoVals.length === 0 && oldestDays > 0) {
+    dsoScore = oldestDays <= 5 ? 2 : 5
+    dsoFromOverdue = true
+  } else if (medianDaysLate <= 0) dsoScore = 1
   else if (medianDaysLate <= 7) dsoScore = 2
   else if (medianDaysLate <= 21) dsoScore = 3
   else if (medianDaysLate <= 45) dsoScore = 4
@@ -489,15 +511,8 @@ function debiteurScores(debNr) {
   // Huidige stand — gemiddelde van twee sub-scores volgens risicoscore-spec:
   //   1. % vervallen (hoe groot is het probleem nu)
   //   2. Leeftijd oudste post (hoe lang sleept het al)
-  const totalOpen = e.openFacturen.reduce((s, f) => s + num(f['Balance amount']), 0)
-  const overdue = e.openFacturen.filter((f) => f.Duedate && new Date(f.Duedate) < today)
-  const overdueSum = overdue.reduce((s, f) => s + num(f['Balance amount']), 0)
-  const pctOverdue = totalOpen > 0 ? overdueSum / totalOpen : 0
-  let oldestDays = 0
-  for (const f of overdue) {
-    const d = daysBetween(today, f.Duedate)
-    if (d > oldestDays) oldestDays = d
-  }
+  // totalOpen/overdueSum/pctOverdue/oldestDays zijn al berekend boven (nodig
+  // voor de DSO-edge-case op debiteuren zonder betaalhistorie).
 
   // Sub-score 1: % vervallen → 1-5
   const pctOverduePerc = pctOverdue * 100
@@ -627,6 +642,8 @@ function debiteurScores(debNr) {
         score: dsoScore,
         median_days_late: Math.round(medianDaysLate),
         invoice_count: dsoVals.length,
+        from_overdue: dsoFromOverdue,
+        oudste_dagen_vervallen: dsoFromOverdue ? oldestDays : undefined,
       },
       trend: {
         score: trendScore,

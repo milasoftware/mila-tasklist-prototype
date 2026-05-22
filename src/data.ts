@@ -84,7 +84,13 @@ export type Task = {
 export type Confidence = 'hoog' | 'middel' | 'geen'
 
 export type BetaalgedragBreakdown = {
-  dso: { score: number; median_days_late: number; invoice_count: number }
+  dso: {
+    score: number
+    median_days_late: number
+    invoice_count: number
+    from_overdue?: boolean
+    oudste_dagen_vervallen?: number
+  }
   trend: {
     score: number | null
     label: string

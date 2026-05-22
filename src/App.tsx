@@ -1010,10 +1010,16 @@ function risicoBullets(task: Task): string[] {
   const bullets: string[] = []
 
   if (r.betaalgedrag_breakdown) {
-    const dso = r.betaalgedrag_breakdown.dso.median_days_late
-    if (dso < 0) bullets.push(`Betaalt gemiddeld ${Math.abs(dso)} dagen vóór de vervaldatum.`)
-    else if (dso === 0) bullets.push('Betaalt gemiddeld op de vervaldatum.')
-    else bullets.push(`Betaalt gemiddeld ${dso} dagen na de vervaldatum.`)
+    const dsoBlock = r.betaalgedrag_breakdown.dso
+    if (dsoBlock.from_overdue) {
+      const ou = dsoBlock.oudste_dagen_vervallen ?? 0
+      bullets.push(`Geen betaalhistorie — oudste vervallen post is ${ou} dagen oud.`)
+    } else {
+      const dso = dsoBlock.median_days_late
+      if (dso < 0) bullets.push(`Betaalt gemiddeld ${Math.abs(dso)} dagen vóór de vervaldatum.`)
+      else if (dso === 0) bullets.push('Betaalt gemiddeld op de vervaldatum.')
+      else bullets.push(`Betaalt gemiddeld ${dso} dagen na de vervaldatum.`)
+    }
 
     const trend = r.betaalgedrag_breakdown.trend
     if (trend.confidence !== 'geen' && trend.score != null) {
@@ -1133,20 +1139,40 @@ function tooltipRisico(task: Task): React.ReactNode {
   )
 }
 
-function tooltipDso(score: number, days: number, count: number): React.ReactNode {
+function tooltipDso(
+  score: number,
+  days: number,
+  count: number,
+  fromOverdue?: boolean,
+  oudsteVervallen?: number,
+): React.ReactNode {
+  const ouLabel = oudsteVervallen ?? 0
+  const fallbackThresholds = [
+    { score: 2, label: '1 – 5 dagen vervallen (grace period)' },
+    { score: 5, label: '> 5 dagen vervallen (rood vlaggetje)' },
+  ]
+  const normalThresholds = [
+    { score: 1, label: 'op tijd of eerder' },
+    { score: 2, label: '1 – 7 dagen te laat' },
+    { score: 3, label: '8 – 21 dagen te laat' },
+    { score: 4, label: '22 – 45 dagen te laat' },
+    { score: 5, label: '45+ dagen te laat' },
+  ]
   return (
     <ScoreTooltip
       title="Hoeveel dagen meestal te laat"
-      description="Mediaan van het aantal dagen dat over de vervaldatum heen wordt gegaan op facturen die in de afgelopen 12 maanden volledig zijn betaald (DSO na vervaldatum). Mediaan i.p.v. gemiddelde — robuuster tegen uitschieters."
-      thresholds={[
-        { score: 1, label: 'op tijd of eerder' },
-        { score: 2, label: '1 – 7 dagen te laat' },
-        { score: 3, label: '8 – 21 dagen te laat' },
-        { score: 4, label: '22 – 45 dagen te laat' },
-        { score: 5, label: '45+ dagen te laat' },
-      ]}
+      description={
+        fromOverdue
+          ? 'Deze klant heeft geen betalingen gedaan in de afgelopen 12 maanden. We vallen daarom terug op de leeftijd van de oudste vervallen post — een grace period van 5 dagen, daarna direct rood.'
+          : 'Mediaan van het aantal dagen dat over de vervaldatum heen wordt gegaan op facturen die in de afgelopen 12 maanden volledig zijn betaald (DSO na vervaldatum). Mediaan i.p.v. gemiddelde — robuuster tegen uitschieters.'
+      }
+      thresholds={fromOverdue ? fallbackThresholds : normalThresholds}
       activeScore={score}
-      current={`Mediaan ${days}d te laat over ${count} facturen betaald in de afgelopen 12 maanden → score ${score}`}
+      current={
+        fromOverdue
+          ? `Geen betaalhistorie — oudste vervallen post ${ouLabel}d → score ${score}`
+          : `Mediaan ${days}d te laat over ${count} facturen betaald in de afgelopen 12 maanden → score ${score}`
+      }
     />
   )
 }
@@ -2027,11 +2053,21 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
                   task.risico.betaalgedrag_breakdown.dso.score,
                   task.risico.betaalgedrag_breakdown.dso.median_days_late,
                   task.risico.betaalgedrag_breakdown.dso.invoice_count,
+                  task.risico.betaalgedrag_breakdown.dso.from_overdue,
+                  task.risico.betaalgedrag_breakdown.dso.oudste_dagen_vervallen,
                 )}
-                caption={`Mediaan: ${task.risico.betaalgedrag_breakdown.dso.median_days_late} dagen na de vervaldatum, op basis van ${task.risico.betaalgedrag_breakdown.dso.invoice_count} facturen betaald in de afgelopen 12 maanden.`}
+                caption={
+                  task.risico.betaalgedrag_breakdown.dso.from_overdue
+                    ? `Geen betaalhistorie in de afgelopen 12 maanden — score op basis van oudste vervallen post (${task.risico.betaalgedrag_breakdown.dso.oudste_dagen_vervallen ?? 0} dagen).`
+                    : `Mediaan: ${task.risico.betaalgedrag_breakdown.dso.median_days_late} dagen na de vervaldatum, op basis van ${task.risico.betaalgedrag_breakdown.dso.invoice_count} facturen betaald in de afgelopen 12 maanden.`
+                }
                 viz={
                   <DsoThermometer
-                    days={task.risico.betaalgedrag_breakdown.dso.median_days_late}
+                    days={
+                      task.risico.betaalgedrag_breakdown.dso.from_overdue
+                        ? task.risico.betaalgedrag_breakdown.dso.oudste_dagen_vervallen ?? 0
+                        : task.risico.betaalgedrag_breakdown.dso.median_days_late
+                    }
                     score={task.risico.betaalgedrag_breakdown.dso.score}
                   />
                 }
