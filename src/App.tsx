@@ -124,8 +124,8 @@ function PercentilesBar({
   return (
     <div className="mt-3 mb-1">
       <p className="text-[11px] text-slate-500 mb-1.5">
-        Alle 445 taken in vijf even grote groepen op basis van totaalbedrag — deze taak (
-        {fmtEUR(taakBedrag)}) zit in groep {activeScore}.
+        Alle {meta.total_taken_gegenereerd} taken in vijf even grote groepen op basis van
+        totaalbedrag — deze taak ({fmtEUR(taakBedrag)}) zit in groep {activeScore}.
       </p>
       <div className="grid grid-cols-5 gap-1">
         {[1, 2, 3, 4, 5].map((seg) => {
@@ -1002,7 +1002,7 @@ function tooltipImpact(score: number, bedrag: number | undefined): React.ReactNo
   return (
     <ScoreTooltip
       title="Hoeveel levert dit op"
-      description="Score op basis van het openstaande bedrag, vergeleken met alle 445 taken in vijf even grote groepen (kwintielen)."
+      description={`Score op basis van het openstaande bedrag, vergeleken met alle ${meta.total_taken_gegenereerd} taken in vijf even grote groepen (kwintielen).`}
       thresholds={[
         { score: 1, label: `< ${fmtEUR(t[0])}` },
         { score: 2, label: `${fmtEUR(t[0])} – ${fmtEUR(t[1])}` },
