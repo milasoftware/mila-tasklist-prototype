@@ -551,14 +551,20 @@ function debiteurScores(debNr) {
   else if (debiteurOmzet < OMZET_P80) omzetconcentratie = 4
   else omzetconcentratie = 5
 
-  // Werkelijke vs afgesproken termijn
+  // Werkelijke vs afgesproken termijn — beide als mediaan, identieke
+  // robuustheidsafweging als de DSO-mediaan: één rare factuur (dispuut,
+  // verloren post) hoort de typische termijn niet te bepalen.
+  const median = (vals) => {
+    if (!vals.length) return null
+    const sorted = [...vals].sort((a, b) => a - b)
+    const mid = Math.floor(sorted.length / 2)
+    return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+  }
   const agreedTerms = e.facturen
     .filter((f) => f.Invoicedate && f.Duedate)
     .map((f) => daysBetween(f.Duedate, f.Invoicedate))
     .filter((d) => d >= 0 && d <= 365)
-  const avgAgreed = agreedTerms.length
-    ? Math.round(agreedTerms.reduce((a, b) => a + b, 0) / agreedTerms.length)
-    : 30
+  const medianAgreed = agreedTerms.length ? Math.round(median(agreedTerms)) : 30
   const actualTerms = paid
     .filter((f) => f.Invoicedate)
     .map((f) => {
@@ -566,10 +572,8 @@ function debiteurScores(debNr) {
       return daysBetween(lastPay, f.Invoicedate)
     })
     .filter((d) => d >= 0 && d <= 730)
-  const avgActual = actualTerms.length
-    ? Math.round(actualTerms.reduce((a, b) => a + b, 0) / actualTerms.length)
-    : avgAgreed
-  const termDiff = avgActual - avgAgreed
+  const medianActual = actualTerms.length ? Math.round(median(actualTerms)) : medianAgreed
+  const termDiff = medianActual - medianAgreed
   let potentieel
   if (termDiff <= 0) potentieel = 0
   else if (termDiff <= 10) potentieel = 1
@@ -636,8 +640,8 @@ function debiteurScores(debNr) {
     oldestDays,
     pctOmzet: round(pctOmzet * 100, 2),
     debiteurOmzet: round(debiteurOmzet, 2),
-    avgAgreed,
-    avgActual,
+    medianAgreed,
+    medianActual,
     potentieel,
     dsoCount: dsoVals.length,
     paidCount: paid.length,
@@ -843,11 +847,11 @@ for (const c of taskCandidates) {
     },
     potentieel: {
       score: scores.potentieel,
-      werkelijke_dagen: scores.avgActual,
-      afgesproken_dagen: scores.avgAgreed,
+      werkelijke_dagen: scores.medianActual,
+      afgesproken_dagen: scores.medianAgreed,
       reden:
         scores.dsoCount > 0
-          ? `Werkelijke termijn ${scores.avgActual}d vs afgesproken ${scores.avgAgreed}d, gemiddeld over ${scores.dsoCount} volledig betaalde facturen.`
+          ? `Werkelijke termijn ${scores.medianActual}d vs afgesproken ${scores.medianAgreed}d, mediaan over ${scores.dsoCount} volledig betaalde facturen.`
           : `Geen volledig betaalde facturen in historie; potentieel afgeleid uit beschikbare data.`,
       pattern: scores.pattern,
     },

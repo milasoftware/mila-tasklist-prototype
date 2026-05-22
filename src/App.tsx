@@ -1047,7 +1047,7 @@ function tooltipPotentieel(
   return (
     <ScoreTooltip
       title="Hoeveel sneller mogelijk"
-      description="Score op basis van het verschil tussen wat er afgesproken is en wat er werkelijk gebeurt — gemiddeld over alle betaalde facturen van deze klant."
+      description="Score op basis van het verschil tussen wat er afgesproken is en wat er werkelijk gebeurt — mediaan over alle betaalde facturen van deze klant (robuust tegen uitschieters)."
       thresholds={[
         { score: 0, label: 'binnen afspraak (geen ruimte)' },
         { score: 1, label: '1 – 10 dagen langer' },
