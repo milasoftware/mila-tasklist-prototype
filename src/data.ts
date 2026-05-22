@@ -61,6 +61,12 @@ export type Task = {
     huidige_stand_oudste_score?: number
     disputen: number | null
     krediet: number | null
+    krediet_limiet?: number
+    krediet_openstaand?: number
+    krediet_onverzekerd_bedrag?: number
+    krediet_onverzekerd_pct?: number
+    krediet_pct_score?: number | null
+    krediet_impact_score?: number | null
     omzetconcentratie: number
     omzetconcentratie_pct?: number
     omzetconcentratie_omzet?: number
@@ -172,6 +178,19 @@ export type Meta = {
     min: number
     max: number
   }
+  krediet_percentielen?: {
+    p20: number
+    p40: number
+    p60: number
+    p80: number
+  }
+  krediet_buckets?: {
+    thresholds: number[]
+    counts: number[]
+    min: number
+    max: number
+  }
+  krediet_populatie_debiteuren?: number
   total_facturen: number
   total_open_facturen: number
   total_taken_gegenereerd: number

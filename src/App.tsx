@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import {
   tasks,
   meta,
@@ -449,6 +449,80 @@ function OmzetPercentilesBar({
       <p className="text-[11px] text-slate-500 mb-1.5">
         Alle {totaalDebiteuren} debiteuren in vijf even grote groepen op basis van netto omzet —
         deze klant ({fmtEUR(debiteurOmzet)} netto) zit in groep {activeScore}.
+      </p>
+      <div className="grid grid-cols-5 gap-1">
+        {[1, 2, 3, 4, 5].map((seg) => {
+          const active = seg === activeScore
+          return (
+            <div
+              key={seg}
+              className={`p-2 rounded text-[10px] text-center ring-1 ${
+                active
+                  ? 'bg-slate-900 text-white ring-slate-900'
+                  : 'bg-slate-50 text-slate-500 ring-slate-200'
+              }`}
+            >
+              <div className={`font-medium ${active ? 'text-white' : 'text-slate-700'}`}>
+                Groep {seg}
+              </div>
+              <div className="mt-1 tabular-nums leading-tight">{ranges[seg - 1]}</div>
+              <div className={`mt-1 tabular-nums ${active ? 'text-white/80' : 'text-slate-400'}`}>
+                {buckets.counts[seg - 1]} debiteuren
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// Stacked bar voor het kredietrisico. Rood deel = onverzekerd (deel dat
+// boven de kredietlimiet uitkomt), grijs = gedekt door de limiet.
+function KredietDekkingBar({
+  onverzekerdPct,
+}: {
+  onverzekerdPct: number
+}) {
+  const pct = Math.max(0, Math.min(100, onverzekerdPct))
+  return (
+    <div className="mt-1.5">
+      <div className="relative h-2 bg-slate-200 rounded-full overflow-hidden ring-1 ring-slate-300">
+        <div className="absolute inset-y-0 left-0 bg-red-400" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="flex justify-between text-[10px] mt-0.5">
+        <span className="text-red-600">{Math.round(pct)}% onverzekerd</span>
+        <span className="text-slate-500">{Math.round(100 - pct)}% binnen limiet</span>
+      </div>
+    </div>
+  )
+}
+
+// Quintiel-weergave voor "Impact bij wanbetaling" — toont het onverzekerd
+// bedrag van deze klant binnen de verdeling van alle debiteuren met
+// onverzekerd > 0. Zelfde stijl als OmzetPercentilesBar.
+function KredietImpactBar({
+  activeScore,
+  onverzekerdBedrag,
+  buckets,
+}: {
+  activeScore: number
+  onverzekerdBedrag: number
+  buckets: { thresholds: number[]; counts: number[]; min: number; max: number }
+}) {
+  const ranges = [
+    `< ${fmtEUR(buckets.thresholds[0])}`,
+    `${fmtEUR(buckets.thresholds[0])} – ${fmtEUR(buckets.thresholds[1])}`,
+    `${fmtEUR(buckets.thresholds[1])} – ${fmtEUR(buckets.thresholds[2])}`,
+    `${fmtEUR(buckets.thresholds[2])} – ${fmtEUR(buckets.thresholds[3])}`,
+    `≥ ${fmtEUR(buckets.thresholds[3])}`,
+  ]
+  const totaalDebiteuren = buckets.counts.reduce((a, b) => a + b, 0)
+  return (
+    <div className="mt-3 mb-1">
+      <p className="text-[11px] text-slate-500 mb-1.5">
+        Alle {totaalDebiteuren} debiteuren met onverzekerd bedrag in vijf even grote groepen — deze
+        klant ({fmtEUR(onverzekerdBedrag)} onverzekerd) zit in groep {activeScore}.
       </p>
       <div className="grid grid-cols-5 gap-1">
         {[1, 2, 3, 4, 5].map((seg) => {
@@ -1180,6 +1254,103 @@ function tooltipOmzetconcentratie(
   )
 }
 
+function tooltipKrediet(
+  score: number,
+  onverzekerdPct: number | undefined,
+  onverzekerdBedrag: number | undefined,
+  pctScore: number | null | undefined,
+  impactScore: number | null | undefined,
+): React.ReactNode {
+  const pctSchaal = [
+    { score: 1, label: '0% (volledig binnen limiet)' },
+    { score: 2, label: '1 – 25%' },
+    { score: 3, label: '26 – 50%' },
+    { score: 4, label: '51 – 75%' },
+    { score: 5, label: '> 75% onverzekerd' },
+  ]
+  const p = meta.krediet_percentielen
+  const impactSchaal = p
+    ? [
+        { score: 1, label: `< ${fmtEUR(p.p20)} onverzekerd` },
+        { score: 2, label: `${fmtEUR(p.p20)} – ${fmtEUR(p.p40)}` },
+        { score: 3, label: `${fmtEUR(p.p40)} – ${fmtEUR(p.p60)}` },
+        { score: 4, label: `${fmtEUR(p.p60)} – ${fmtEUR(p.p80)}` },
+        { score: 5, label: `≥ ${fmtEUR(p.p80)} (top 20% blootstelling)` },
+      ]
+    : []
+  const populatieN = meta.krediet_populatie_debiteuren
+  return (
+    <ScoreTooltip
+      title="Hoe is het kredietrisico"
+      description="Gemiddelde van twee parameters: % onverzekerd (welk deel van het openstaande bedrag valt boven de kredietlimiet) + impact in euro (hoe groot het onverzekerd bedrag is t.o.v. andere debiteuren)."
+      composition={
+        <div className="space-y-3 mb-2">
+          <table className="w-full text-[11px] tabular-nums">
+            <tbody className="text-white/80">
+              <tr>
+                <td className="pr-2 py-0.5">% onverzekerd</td>
+                <td className="text-right pr-1">
+                  {onverzekerdPct !== undefined ? `${onverzekerdPct.toFixed(0)}%` : '—'}
+                </td>
+                <td className="text-white/50 pl-2 text-right">→ score {pctScore ?? '—'}</td>
+              </tr>
+              <tr>
+                <td className="pr-2 py-0.5">Impact (€)</td>
+                <td className="text-right pr-1">
+                  {onverzekerdBedrag !== undefined ? fmtEUR(onverzekerdBedrag) : '—'}
+                </td>
+                <td className="text-white/50 pl-2 text-right">→ score {impactScore ?? '—'}</td>
+              </tr>
+              <tr className="border-t border-white/20">
+                <td className="font-medium pt-1">Kredietrisico</td>
+                <td className="text-right font-semibold pt-1 pr-1">{fmtNL(score, 1)}</td>
+                <td className="text-white/50 pl-2 text-right pt-1">(gemiddelde)</td>
+              </tr>
+            </tbody>
+          </table>
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-white/50 mb-1">
+              Schaal % onverzekerd
+            </p>
+            <table className="w-full text-[11px]">
+              <tbody>
+                {pctSchaal.map((t) => {
+                  const active = t.score === pctScore
+                  return (
+                    <tr key={t.score} className={active ? 'text-white' : 'text-white/60'}>
+                      <td className="pr-2 py-0.5 w-5 tabular-nums">{t.score}</td>
+                      <td className={`py-0.5 ${active ? 'font-medium' : ''}`}>{t.label}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-white/50 mb-1">
+              Schaal impact (€){populatieN ? ` — quintielen over ${populatieN} debiteuren` : ''}
+            </p>
+            <table className="w-full text-[11px]">
+              <tbody>
+                {impactSchaal.map((t) => {
+                  const active = t.score === impactScore
+                  return (
+                    <tr key={t.score} className={active ? 'text-white' : 'text-white/60'}>
+                      <td className="pr-2 py-0.5 w-5 tabular-nums">{t.score}</td>
+                      <td className={`py-0.5 ${active ? 'font-medium' : ''}`}>{t.label}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
+      activeScore={score}
+    />
+  )
+}
+
 function TaskRow({ task, selected, onClick }: { task: Task; selected: boolean; onClick: () => void }) {
   const factuurCount = task.gerelateerde_facturen?.length ?? (task.factuurnummer ? 1 : 0)
   return (
@@ -1540,42 +1711,50 @@ function ComponentBlock({
   )
 }
 
-// Verklaring van de Risicoscore: weegt de drie wél beschikbare sub-scores
-// (betaalgedrag 30, huidige stand 25, omzetconcentratie 10) genormaliseerd
-// op 65. Disputen en kredietverzekering ontbreken in de Covebo-data en
-// vallen daardoor uit de noemer.
+// Verklaring van de Risicoscore: weegt de wél beschikbare sub-scores
+// (betaalgedrag 30, huidige stand 25, krediet 25, omzetconcentratie 10).
+// Disputen ontbreekt in de Covebo-data en valt uit de noemer. Krediet
+// doet alleen mee als de debiteur openstaand bedrag heeft (anders null).
 function RisicoBreakdown({ task, showSources }: { task: Task; showSources: boolean }) {
   const r = task.risico
-  const weights = { betaalgedrag: 30, huidige_stand: 25, omzetconcentratie: 10 }
-  const totaalGewicht = weights.betaalgedrag + weights.huidige_stand + weights.omzetconcentratie
-  const bijdrage = {
-    betaalgedrag: (r.betaalgedrag * weights.betaalgedrag) / totaalGewicht,
-    huidige_stand: (r.huidige_stand * weights.huidige_stand) / totaalGewicht,
-    omzetconcentratie: (r.omzetconcentratie * weights.omzetconcentratie) / totaalGewicht,
+  type Sub = { label: string; score: number; decimals: number; weight: number }
+  const subs: Sub[] = [
+    { label: 'Hoe is het betaalgedrag', score: r.betaalgedrag, decimals: 2, weight: 30 },
+    { label: 'Hoe staan we er nu voor', score: r.huidige_stand, decimals: 2, weight: 25 },
+  ]
+  if (r.krediet != null) {
+    subs.push({ label: 'Hoe is het kredietrisico', score: r.krediet, decimals: 2, weight: 25 })
   }
-  const totaal = bijdrage.betaalgedrag + bijdrage.huidige_stand + bijdrage.omzetconcentratie
+  subs.push({
+    label: 'Hoe belangrijk is deze klant voor ons',
+    score: r.omzetconcentratie,
+    decimals: 0,
+    weight: 10,
+  })
+  const totaalGewicht = subs.reduce((s, x) => s + x.weight, 0)
+  const totaal = subs.reduce((s, x) => s + (x.score * x.weight) / totaalGewicht, 0)
   const pct = (w: number) => `${Math.round((w / totaalGewicht) * 100)}%`
+  const gewichtSom = subs.map((x) => x.weight).join(' + ')
+  const noemerToelichting = r.krediet != null
+    ? `Disputen ontbreekt in de data — de score is genormaliseerd over de vier wél beschikbare categorieën (${gewichtSom} = ${totaalGewicht}).`
+    : `Disputen en krediet doen niet mee — score genormaliseerd over de drie beschikbare categorieën (${gewichtSom} = ${totaalGewicht}).`
   return (
     <section className="border border-slate-200 rounded-md p-4 mt-4">
       <h4 className="font-medium text-slate-900 mb-1">Zo komt deze risicoscore tot stand</h4>
       <p className="text-sm text-slate-600 mb-3">
-        Drie sub-scores van 1 tot 5, elk met een eigen gewicht. Disputen en kredietverzekering
-        ontbreken in de data — de score is genormaliseerd over de drie wél beschikbare categorieën
-        (30 + 25 + 10 = 65).
+        Sub-scores van 1 tot 5, elk met een eigen gewicht. {noemerToelichting}
       </p>
       <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
-        <span className="text-slate-600">Hoe is het betaalgedrag</span>
-        <span className="text-slate-500">{fmtNL(r.betaalgedrag, 2)}</span>
-        <span className="text-slate-400">× {pct(weights.betaalgedrag)}</span>
-        <span className="text-slate-700 text-right">{fmtNL(bijdrage.betaalgedrag, 2)}</span>
-        <span className="text-slate-600">Hoe staan we er nu voor</span>
-        <span className="text-slate-500">{fmtNL(r.huidige_stand, 2)}</span>
-        <span className="text-slate-400">× {pct(weights.huidige_stand)}</span>
-        <span className="text-slate-700 text-right">{fmtNL(bijdrage.huidige_stand, 2)}</span>
-        <span className="text-slate-600">Hoe belangrijk is deze klant voor ons</span>
-        <span className="text-slate-500">{fmtNL(r.omzetconcentratie, 0)}</span>
-        <span className="text-slate-400">× {pct(weights.omzetconcentratie)}</span>
-        <span className="text-slate-700 text-right">{fmtNL(bijdrage.omzetconcentratie, 2)}</span>
+        {subs.map((s) => (
+          <Fragment key={s.label}>
+            <span className="text-slate-600">{s.label}</span>
+            <span className="text-slate-500">{fmtNL(s.score, s.decimals)}</span>
+            <span className="text-slate-400">× {pct(s.weight)}</span>
+            <span className="text-slate-700 text-right">
+              {fmtNL((s.score * s.weight) / totaalGewicht, 2)}
+            </span>
+          </Fragment>
+        ))}
         <span className="text-slate-900 font-medium border-t border-slate-200 pt-1.5 mt-1">
           Totaal
         </span>
@@ -1586,8 +1765,8 @@ function RisicoBreakdown({ task, showSources }: { task: Task; showSources: boole
       </div>
       {showSources && (
         <p className="font-mono text-xs text-slate-400 mt-3">
-          ({fmtNL(r.betaalgedrag, 2)} × 30 + {fmtNL(r.huidige_stand, 2)} × 25 +{' '}
-          {fmtNL(r.omzetconcentratie, 0)} × 10) / 65 = {fmtNL(totaal, 2)}
+          ({subs.map((s) => `${fmtNL(s.score, s.decimals)} × ${s.weight}`).join(' + ')}) /{' '}
+          {totaalGewicht} = {fmtNL(totaal, 2)}
         </p>
       )}
     </section>
@@ -1836,6 +2015,62 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
               ) : undefined
             }
           />
+          {task.risico.krediet != null && (
+            <MetricCard
+              title="Hoe is het kredietrisico"
+              score={task.risico.krediet}
+              tooltip={tooltipKrediet(
+                task.risico.krediet,
+                task.risico.krediet_onverzekerd_pct,
+                task.risico.krediet_onverzekerd_bedrag,
+                task.risico.krediet_pct_score,
+                task.risico.krediet_impact_score,
+              )}
+              caption={
+                task.risico.krediet_openstaand !== undefined &&
+                task.risico.krediet_limiet !== undefined
+                  ? (() => {
+                      const limiet = task.risico.krediet_limiet
+                      const open = task.risico.krediet_openstaand
+                      const onverzekerdBedrag = task.risico.krediet_onverzekerd_bedrag ?? 0
+                      const onverzekerdPct = task.risico.krediet_onverzekerd_pct ?? 0
+                      let detail
+                      if (open <= 0) {
+                        detail = 'Geen openstaand bedrag — op dit moment geen kredietrisico.'
+                      } else if (limiet > 0) {
+                        detail = `Openstaand ${fmtEUR(open)} — ${Math.round((open / limiet) * 100)}% van limiet benut. Onverzekerd: ${fmtEUR(onverzekerdBedrag)} (${Math.round(onverzekerdPct)}%).`
+                      } else {
+                        detail = `${fmtEUR(open)} openstaand telt volledig als onverzekerd (${Math.round(onverzekerdPct)}%).`
+                      }
+                      return (
+                        <>
+                          <span className="font-medium text-slate-700">
+                            Kredietlimiet: {fmtEUR(limiet)}
+                          </span>
+                          <br />
+                          <span>{detail}</span>
+                        </>
+                      )
+                    })()
+                  : undefined
+              }
+              viz={
+                task.risico.krediet_onverzekerd_pct !== undefined &&
+                task.risico.krediet_onverzekerd_bedrag !== undefined &&
+                task.risico.krediet_impact_score != null &&
+                meta.krediet_buckets ? (
+                  <div className="space-y-2">
+                    <KredietDekkingBar onverzekerdPct={task.risico.krediet_onverzekerd_pct} />
+                    <KredietImpactBar
+                      activeScore={task.risico.krediet_impact_score}
+                      onverzekerdBedrag={task.risico.krediet_onverzekerd_bedrag}
+                      buckets={meta.krediet_buckets}
+                    />
+                  </div>
+                ) : undefined
+              }
+            />
+          )}
           <MetricCard
             title="Hoe belangrijk is deze klant voor ons"
             score={task.risico.omzetconcentratie}
@@ -1869,23 +2104,14 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
               score={task.risico.disputen}
             />
           )}
-          {task.risico.krediet !== null && (
-            <MetricCard
-              title="Kredietverzekering"
-              score={task.risico.krediet}
-            />
-          )}
-          {(task.risico.disputen === null || task.risico.krediet === null) && (
-            <div className="border border-dashed border-slate-200 rounded-md p-4 text-xs text-slate-400 italic leading-relaxed">
-              <p className="font-medium text-slate-500 not-italic mb-1">Niet beschikbaar in data</p>
-              {task.risico.disputen === null && task.risico.krediet === null
-                ? 'Disputen en kredietverzekering zitten niet in de aangeleverde Covebo-data. Die twee categorieën tellen daarom niet mee — de risico-score is genormaliseerd over de drie wél beschikbare sub-metrics.'
-                : task.risico.disputen === null
-                  ? 'Disputen zitten niet in de aangeleverde data.'
-                  : 'Kredietverzekering zit niet in de aangeleverde data.'}
-            </div>
-          )}
         </div>
+        {task.risico.disputen === null && (
+          <div className="border border-dashed border-slate-200 rounded-md p-4 text-xs text-slate-400 italic leading-relaxed">
+            <p className="font-medium text-slate-500 not-italic mb-1">Niet beschikbaar in data</p>
+            Disputen zitten niet in de aangeleverde Covebo-data. Die categorie telt daarom niet
+            mee — de risico-score is genormaliseerd over de wél beschikbare sub-metrics.
+          </div>
+        )}
         <RisicoBreakdown task={task} showSources={showSources} />
       </ComponentBlock>
 

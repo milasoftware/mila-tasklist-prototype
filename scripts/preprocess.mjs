@@ -318,6 +318,50 @@ const omzetBuckets = {
   max: round(omzetPopulatie[omzetPopulatie.length - 1] ?? 0, 2),
 }
 
+// Krediet (onverzekerd) per debiteur. Bron: CreditInformationCreditlimit
+// als gedekt/veilig deel; onverzekerd = max(0, openstaand - limiet). Voor
+// debiteuren zonder openstaand bedrag blijft de krediet-score null (n.v.t.).
+// Percentielen worden bepaald over de populatie met onverzekerd > 0, zodat
+// "impact bij wanbetaling" een zelf-kalibrerende quintiel-score wordt.
+const onverzekerdPerDeb = new Map()
+for (const [k, e] of byDeb.entries()) {
+  const openstaand = e.openFacturen.reduce((s, f) => s + num(f['Balance amount']), 0)
+  const debInfo = debByNr.get(k)
+  const limiet = debInfo ? num(debInfo.CreditInformationCreditlimit) : 0
+  const onverzekerd = openstaand > 0 ? Math.max(0, openstaand - limiet) : 0
+  onverzekerdPerDeb.set(k, { openstaand, limiet, onverzekerd })
+}
+const kredietPopulatie = [...onverzekerdPerDeb.values()]
+  .filter((v) => v.onverzekerd > 0)
+  .map((v) => v.onverzekerd)
+  .sort((a, b) => a - b)
+const KRED_P20 = percentile(kredietPopulatie, 20)
+const KRED_P40 = percentile(kredietPopulatie, 40)
+const KRED_P60 = percentile(kredietPopulatie, 60)
+const KRED_P80 = percentile(kredietPopulatie, 80)
+console.log(
+  `  Krediet-percentielen onverzekerd (P20/P40/P60/P80): ${formatEUR(KRED_P20)} / ${formatEUR(KRED_P40)} / ${formatEUR(KRED_P60)} / ${formatEUR(KRED_P80)}`,
+)
+const kredietBucketCounts = [0, 0, 0, 0, 0]
+for (const v of kredietPopulatie) {
+  if (v < KRED_P20) kredietBucketCounts[0]++
+  else if (v < KRED_P40) kredietBucketCounts[1]++
+  else if (v < KRED_P60) kredietBucketCounts[2]++
+  else if (v < KRED_P80) kredietBucketCounts[3]++
+  else kredietBucketCounts[4]++
+}
+const kredietBuckets = {
+  thresholds: [
+    round(KRED_P20, 2),
+    round(KRED_P40, 2),
+    round(KRED_P60, 2),
+    round(KRED_P80, 2),
+  ],
+  counts: kredietBucketCounts,
+  min: round(kredietPopulatie[0] ?? 0, 2),
+  max: round(kredietPopulatie[kredietPopulatie.length - 1] ?? 0, 2),
+}
+
 function debiteurScores(debNr) {
   const e = byDeb.get(debNr)
   if (!e) return null
@@ -512,11 +556,44 @@ function debiteurScores(debNr) {
   else if (termDiff <= 90) potentieel = 4
   else potentieel = 5
 
+  // Krediet — onverzekerd bedrag (openstaand − CreditInformationCreditlimit).
+  // Sub 1: onverzekerd % via vaste drempels (1-5). Sub 2: onverzekerd in €
+  // via percentielen over alle debiteuren met onverzekerd > 0. Composiet =
+  // gemiddelde van de twee sub-scores, zelfde patroon als huidige_stand.
+  // Bij totalOpen = 0 (geen openstaand bedrag) zijn beide sub-scores 1 en
+  // dus krediet = 1: er is op dit moment geen kredietrisico.
+  const kredietInfo = onverzekerdPerDeb.get(debNr)
+  const kredietLimiet = kredietInfo?.limiet ?? 0
+  const onverzekerdBedrag = kredietInfo?.onverzekerd ?? 0
+  const onverzekerdPct = totalOpen > 0 ? (onverzekerdBedrag / totalOpen) * 100 : 0
+  let kredietPctScore
+  if (onverzekerdPct === 0) kredietPctScore = 1
+  else if (onverzekerdPct <= 25) kredietPctScore = 2
+  else if (onverzekerdPct <= 50) kredietPctScore = 3
+  else if (onverzekerdPct <= 75) kredietPctScore = 4
+  else kredietPctScore = 5
+  let kredietImpactScore
+  if (onverzekerdBedrag <= 0) kredietImpactScore = 1
+  else if (onverzekerdBedrag < KRED_P20) kredietImpactScore = 1
+  else if (onverzekerdBedrag < KRED_P40) kredietImpactScore = 2
+  else if (onverzekerdBedrag < KRED_P60) kredietImpactScore = 3
+  else if (onverzekerdBedrag < KRED_P80) kredietImpactScore = 4
+  else kredietImpactScore = 5
+  const krediet = (kredietPctScore + kredietImpactScore) / 2
+
   // Risico — gewogen gemiddelde over beschikbare categorieën.
   // Originele wegingen: betaalgedrag 30, huidige_stand 25, disputen 10,
-  // krediet 25, omzetconcentratie 10. Disputen + krediet ontbreken: skip
-  // en normaliseer op basis van (30+25+10)=65.
-  const risicoScore = (betaalgedrag * 30 + huidigeStand * 25 + omzetconcentratie * 10) / 65
+  // krediet 25, omzetconcentratie 10. Disputen ontbreekt in de Covebo-data
+  // en valt uit de noemer; krediet doet altijd mee (score 1 bij geen
+  // openstaand bedrag). Noemer is dus 90.
+  const risicoSubs = [
+    { val: betaalgedrag, w: 30 },
+    { val: huidigeStand, w: 25 },
+    { val: krediet, w: 25 },
+    { val: omzetconcentratie, w: 10 },
+  ].filter((x) => x.val != null)
+  const risicoNoemer = risicoSubs.reduce((s, x) => s + x.w, 0)
+  const risicoScore = risicoSubs.reduce((s, x) => s + x.val * x.w, 0) / risicoNoemer
 
   return {
     betaalgedrag: round(betaalgedrag, 2),
@@ -525,7 +602,12 @@ function debiteurScores(debNr) {
     huidigeStandOudsteScore: oldestDaysScore,
     omzetconcentratie,
     disputen: null,
-    krediet: null,
+    krediet: krediet != null ? round(krediet, 2) : null,
+    kredietLimiet: round(kredietLimiet, 2),
+    kredietOnverzekerdBedrag: round(onverzekerdBedrag, 2),
+    kredietOnverzekerdPct: round(onverzekerdPct, 1),
+    kredietPctScore,
+    kredietImpactScore,
     risicoScore: round(risicoScore, 2),
     medianDaysLate: Math.round(medianDaysLate),
     pctOverdue: round(pctOverdue * 100, 1),
@@ -746,7 +828,13 @@ for (const c of taskCandidates) {
       huidige_stand_oudste_dagen: scores.oldestDays,
       huidige_stand_oudste_score: scores.huidigeStandOudsteScore,
       disputen: null,
-      krediet: null,
+      krediet: scores.krediet,
+      krediet_limiet: scores.kredietLimiet,
+      krediet_openstaand: round(scores.totalOpen, 2),
+      krediet_onverzekerd_bedrag: scores.kredietOnverzekerdBedrag,
+      krediet_onverzekerd_pct: scores.kredietOnverzekerdPct,
+      krediet_pct_score: scores.kredietPctScore,
+      krediet_impact_score: scores.kredietImpactScore,
       omzetconcentratie: scores.omzetconcentratie,
       omzetconcentratie_pct: scores.pctOmzet,
       omzetconcentratie_omzet: scores.debiteurOmzet,
@@ -873,6 +961,14 @@ const out = {
       p80: round(OMZET_P80, 2),
     },
     omzet_buckets: omzetBuckets,
+    krediet_percentielen: {
+      p20: round(KRED_P20, 2),
+      p40: round(KRED_P40, 2),
+      p60: round(KRED_P60, 2),
+      p80: round(KRED_P80, 2),
+    },
+    krediet_buckets: kredietBuckets,
+    krediet_populatie_debiteuren: kredietPopulatie.length,
     total_facturen: allFacturen.length,
     total_open_facturen: openFacturenAll.length,
     total_taken_gegenereerd: tasks.length,
@@ -883,8 +979,8 @@ const out = {
     betalingen_in_set: betalingenOut.length,
     losse_betalingen_in_set: losseBetalingenOut.length,
     bedrag_buckets: bedragBuckets,
-    uitgesloten_categorieen: ['disputen', 'krediet'],
-    uitsluitings_reden: 'Geen brondata aanwezig in Covebo-export — risicoberekening genormaliseerd over resterende categorieën (betaalgedrag 30, huidige_stand 25, omzetconcentratie 10).',
+    uitgesloten_categorieen: ['disputen'],
+    uitsluitings_reden: 'Disputen ontbreken in de Covebo-export — risicoberekening genormaliseerd over de overige categorieën (betaalgedrag 30, huidige_stand 25, krediet 25, omzetconcentratie 10 = 90).',
   },
   tasks: topTasks,
   debiteuren,
