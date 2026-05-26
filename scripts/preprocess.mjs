@@ -97,100 +97,348 @@ function coefficientOfVariation(values) {
   return Math.sqrt(variance) / Math.abs(mean)
 }
 
-// Standaard betaaldag pattern recognition. Bekijkt drie patroon-types:
-// - maandelijks/einde_maand (dag-van-de-maand clustering)
-// - wekelijks (dag-van-de-week mode)
-// - interval (vast aantal dagen tussen betalingen)
-// Geeft beste fit + confidence-label terug.
+// Standaard betaaldag pattern recognition v3.
+//
+// Bron: fysieke betalingen (records met Invoicetype/Documenttype in
+//   {Betaling, Terugbetaling, leeg}). Géén interne reconciliaties uit
+//   Factuur.payments — dat zijn boekhoudacties (creditnota's wegstrepen
+//   op kasdagen) en geen klantgedrag.
+// Venster: laatste 12 maanden vóór snapshot.
+// Beslisregel: toon één dag als
+//   (a) ≥4 betalingen op de dominante dag EN ≥50% van alle betalingen, OF
+//   (b) ≥3 betalingen die ALLE op dezelfde dag vielen (100% fit).
+//   Anders: "geen standaard betaaldag".
+// Twee patroon-types worden geprobeerd; winnaar = hoogste fit:
+//   - vaste weekdag (mode op dag-van-de-week)
+//   - vaste dag van de maand (±1 dag marge — écht rond die dag)
+// Het interval-type uit v2 is geschrapt: het levert geen concrete dag op
+// die je in de UI kunt tonen of in de herinneringsflow kunt verschuiven.
+//
+// Feestdag-correctie: betalingen die binnenkwamen na een aaneengesloten
+// reeks non-werkdagen (feestdag of weekend) worden teruggeschoven naar de
+// laatste werkdag vóór die reeks — alleen als er géén werkdag tussen zat.
+// Daardoor wordt een vrijdag-klant die maandag na Pasen betaalt alsnog
+// als vrijdag-betaler herkend. Feestdag-set = unie van TARGET + NL + BE.
+//
+// Patroon-verschuiving: we berekenen het patroon over de oude 9 maanden
+// (maand 12 t/m 4) én over de laatste 3 maanden apart. Als beide tot een
+// dag komen en die dagen verschillen, schakelen we automatisch over op
+// het nieuwe patroon en loggen dat in de audit-log.
+const STANDAARD_BETAALDAG_VENSTER_MAANDEN = 12
+const STANDAARD_BETAALDAG_NIEUW_VENSTER_DAGEN = 90 // = 3 mnd
+const STANDAARD_BETAALDAG_MIN_HITS = 4
+const STANDAARD_BETAALDAG_MIN_FIT = 0.5
+const STANDAARD_BETAALDAG_PERFECT_MIN_HITS = 3 // bij 100% fit mag n lager
+
+// ----- feestdag-helpers -----------------------------------------------------
+
+// Westerse paas-zondag voor een gegeven jaar — Anonymus Gregoriaans
+// (Meeus-Jones). Geeft Date in UTC. Alle andere variabele feestdagen
+// (Goede Vrijdag, Paasmaandag, Hemelvaart, Pinkstermaandag) zijn een
+// vaste offset hier vandaan.
+function paasZondag(year) {
+  const a = year % 19
+  const b = Math.floor(year / 100)
+  const c = year % 100
+  const d = Math.floor(b / 4)
+  const e = b % 4
+  const f = Math.floor((b + 8) / 25)
+  const g = Math.floor((b - f + 1) / 3)
+  const h = (19 * a + b - d - g + 15) % 30
+  const i = Math.floor(c / 4)
+  const k = c % 4
+  const l = (32 + 2 * e + 2 * i - h - k) % 7
+  const m = Math.floor((a + 11 * h + 22 * l) / 451)
+  const month = Math.floor((h + l - 7 * m + 114) / 31)
+  const day = ((h + l - 7 * m + 114) % 31) + 1
+  return new Date(Date.UTC(year, month - 1, day))
+}
+
+const isoDate = (date) => date.toISOString().slice(0, 10)
+const addDays = (date, n) => new Date(date.getTime() + n * oneDay)
+
+// Bouwt een Set met ISO-datums (YYYY-MM-DD) van alle bank-/bedrijfssluiting-
+// dagen in de gegeven jaren. Unie van:
+//   - TARGET2/SEPA banksluitingsdagen (Goede Vrijdag, Paasmaandag, 1 mei,
+//     1 jan, 25 + 26 dec)
+//   - NL nationale feestdagen (incl. Koningsdag, Hemelvaart, Tweede
+//     Pinksterdag, Tweede Paasdag)
+//   - BE nationale feestdagen (incl. nationale feestdag 21 jul,
+//     O.L.V. Hemelvaart 15 aug, Allerheiligen, Wapenstilstand)
+function bouwFeestdagSet(jaren) {
+  const set = new Set()
+  for (const y of jaren) {
+    const paas = paasZondag(y)
+    const goedeVrijdag = addDays(paas, -2)
+    const paasmaandag = addDays(paas, 1)
+    const hemelvaart = addDays(paas, 39)
+    const pinksterMaandag = addDays(paas, 50)
+    const vaste = [
+      [1, 1], // Nieuwjaarsdag (NL/BE/TARGET)
+      [5, 1], // Dag v.d. Arbeid (BE/TARGET) — geen NL feestdag
+      [4, 27], // Koningsdag (NL) — als zo: 26
+      [7, 21], // Nationale feestdag (BE)
+      [8, 15], // O.L.V. Hemelvaart (BE)
+      [11, 1], // Allerheiligen (BE)
+      [11, 11], // Wapenstilstand (BE)
+      [12, 25], // Eerste Kerstdag (NL/BE/TARGET)
+      [12, 26], // Tweede Kerstdag (NL/TARGET)
+    ]
+    for (const [m, d] of vaste) {
+      let dt = new Date(Date.UTC(y, m - 1, d))
+      // Koningsdag valt op 26 april als 27 april op zondag valt.
+      if (m === 4 && d === 27 && dt.getUTCDay() === 0) dt = addDays(dt, -1)
+      set.add(isoDate(dt))
+    }
+    set.add(isoDate(goedeVrijdag))
+    set.add(isoDate(paas))
+    set.add(isoDate(paasmaandag))
+    set.add(isoDate(hemelvaart))
+    set.add(isoDate(pinksterMaandag))
+  }
+  return set
+}
+
+// Set met alle feestdagen die we tegen kunnen komen in de dataset
+// (historie + snapshot-jaar). Wordt eenmalig opgebouwd.
+const FEESTDAGEN = bouwFeestdagSet([
+  today.getUTCFullYear() - 2,
+  today.getUTCFullYear() - 1,
+  today.getUTCFullYear(),
+  today.getUTCFullYear() + 1,
+])
+
+// Voor een betaaldatum: geeft de werkdag direct vóór de non-werkdag-reeks
+// die er direct aan voorafging — of null als er geen non-werkdag-reeks
+// vóór deze datum lag (= geen feestdag/weekend tussen voorgaande werkdag
+// en deze datum). Conceptueel: "de laatste dag waarop de klant zou kunnen
+// hebben betalen als ze had gewild voordat het systeem stilstond".
+//
+// Voorbeelden:
+//   - vrijdag na Hemelvaartsdag → woensdag (do = Hemelvaart, wo = werkdag)
+//   - dinsdag na Pasen → donderdag (ma=Paasma, zo+za=weekend, vr=Goede Vrijdag, do=werkdag)
+//   - maandag na een normaal weekend → vrijdag (zo+za=weekend, vr=werkdag)
+//   - donderdag na een gewone woensdag → null (geen non-werkdag tussen)
+//
+// Max 7 dagen terug; meer is een te lange klantvakantie en geen
+// systeem-effect, dus dan corrigeren we niet.
+function werkdagVoorReeks(isoDatum) {
+  let cursor = new Date(isoDatum)
+  let nonWerkdagen = 0
+  for (let i = 0; i < 7; i++) {
+    const vorige = addDays(cursor, -1)
+    const dow = vorige.getUTCDay()
+    const isWeekend = dow === 0 || dow === 6
+    const isFeestdag = FEESTDAGEN.has(isoDate(vorige))
+    if (!isWeekend && !isFeestdag) {
+      // Vorige is een werkdag. Als er een reeks non-werkdagen direct
+      // voorafging aan onze input, geef die werkdag terug. Anders null.
+      return nonWerkdagen > 0 ? isoDate(vorige) : null
+    }
+    nonWerkdagen++
+    cursor = vorige
+  }
+  return null
+}
+
+// ----- pattern-detectie -----------------------------------------------------
+
+// Berekent de beste week- en maanddag-fit over een set datums, plus
+// hoeveelheid hits en totale n. Past beslisregel toe en geeft één
+// gekozen "dag" terug — of null als geen drempel wordt gehaald.
+function bepaalDagUitDatums(uniqueDates) {
+  const n = uniqueDates.length
+  if (n === 0) return null
+
+  const dowLabels = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag']
+
+  // Weekdag-fit
+  const dowCount = new Array(7).fill(0)
+  for (const d of uniqueDates) dowCount[new Date(d).getUTCDay()]++
+  let bestDow = 0
+  for (let i = 1; i < 7; i++) if (dowCount[i] > dowCount[bestDow]) bestDow = i
+  const weekHits = dowCount[bestDow]
+  const weekFit = weekHits / n
+
+  // Maanddag-fit (±1 marge)
+  let bestMonthDay = 1
+  let bestMonthHits = 0
+  for (let center = 1; center <= 31; center++) {
+    let hits = 0
+    for (const d of uniqueDates) {
+      const day = new Date(d).getUTCDate()
+      if (Math.min(Math.abs(day - center), 30 - Math.abs(day - center)) <= 1) hits++
+    }
+    if (hits > bestMonthHits) {
+      bestMonthHits = hits
+      bestMonthDay = center
+    }
+  }
+  const monthFit = bestMonthHits / n
+
+  // Beste van de twee (= hoogste fit)
+  const weekCand = {
+    type: 'wekelijks',
+    waarde: `elke ${dowLabels[bestDow]}`,
+    dag_index: bestDow,
+    dag_label: dowLabels[bestDow],
+    hits: weekHits,
+    fit: weekFit,
+  }
+  const monthCand = {
+    type: 'maanddag',
+    waarde: `rond de ${bestMonthDay}e van de maand`,
+    dag_index: bestMonthDay,
+    dag_label: `de ${bestMonthDay}e`,
+    hits: bestMonthHits,
+    fit: monthFit,
+  }
+  const best = weekFit >= monthFit ? weekCand : monthCand
+
+  // Beslisregel
+  const rule_a = best.hits >= STANDAARD_BETAALDAG_MIN_HITS && best.fit >= STANDAARD_BETAALDAG_MIN_FIT
+  const rule_b = best.hits >= STANDAARD_BETAALDAG_PERFECT_MIN_HITS && best.fit === 1
+  if (!rule_a && !rule_b) return { ...best, n, passes: false }
+  return { ...best, n, passes: true }
+}
+
 function detectPattern(paymentDates) {
-  // Dedupliceer naar unieke betaaldata. Meerdere deelbetalingen op
-  // dezelfde dag tellen als één betaalmoment.
-  const sorted = [...new Set(paymentDates)].sort()
-  const n = sorted.length
-  if (n < 4) {
+  const baseMeta = {
+    bron: 'fysieke_betalingen',
+    venster_maanden: STANDAARD_BETAALDAG_VENSTER_MAANDEN,
+    nieuw_venster_dagen: STANDAARD_BETAALDAG_NIEUW_VENSTER_DAGEN,
+    min_hits: STANDAARD_BETAALDAG_MIN_HITS,
+    min_fit_pct: Math.round(STANDAARD_BETAALDAG_MIN_FIT * 100),
+    perfect_min_hits: STANDAARD_BETAALDAG_PERFECT_MIN_HITS,
+    feestdag_correctie: true,
+  }
+
+  // Filter op 12-mnd venster (geen correctie hier — die past selectief
+  // verderop op basis van de rauwe dominante dag).
+  const windowCutoff = today.getTime() - STANDAARD_BETAALDAG_VENSTER_MAANDEN * 30.44 * oneDay
+  const inWindowRaw = [
+    ...new Set(paymentDates.filter((d) => new Date(d).getTime() >= windowCutoff)),
+  ].sort()
+  const nTotaal = inWindowRaw.length
+
+  if (nTotaal === 0) {
     return {
       pattern_type: 'geen',
       pattern_value: null,
       fit_pct: 0,
-      payments_observed: n,
+      hits: 0,
+      payments_observed: 0,
       confidence: 'geen',
-      explanation: `Te weinig unieke betaalmomenten (${n}) om een patroon te detecteren.`,
+      ...baseMeta,
+      explanation: `Geen fysieke betalingen in de laatste ${STANDAARD_BETAALDAG_VENSTER_MAANDEN} maanden.`,
     }
   }
 
-  // 1) Dag-van-de-maand clustering — probeer elk centerpunt 1..31 met ±3-window
-  //    (modulo 30 om wrap-around bij einde maand mee te nemen).
-  const days = sorted.map((d) => new Date(d).getUTCDate())
-  let bestMonthlyDay = 1
-  let bestMonthlyFit = 0
-  for (let center = 1; center <= 31; center++) {
-    const fit =
-      days.filter(
-        (d) => Math.min(Math.abs(d - center), 30 - Math.abs(d - center)) <= 3,
-      ).length / n
-    if (fit > bestMonthlyFit) {
-      bestMonthlyFit = fit
-      bestMonthlyDay = center
+  // Twee-passes feestdag-correctie: bepaal eerst de dominante dag op
+  // rauwe data, schuif daarna alleen betalingen waarvan de "werkdag voor
+  // de non-werkdag-reeks" overeenkomt met die dominante dag. Anders zou
+  // een dinsdag-betaler haar dinsdag-na-Pasen onterecht naar donderdag
+  // herclassificeerd zien.
+  const correctieFor = (rawDates) => {
+    const pass1 = bepaalDagUitDatums(rawDates)
+    if (!pass1?.passes) {
+      // Geen dominante dag → geen correctie zinvol. Pass 3 = pass 1.
+      return { dag: pass1, n_gecorrigeerd: 0 }
     }
+    let n_gecorrigeerd = 0
+    const gecorrigeerd = rawDates.map((d) => {
+      const werkdag = werkdagVoorReeks(d)
+      if (werkdag === null) return d
+      // Match-check tegen pass1-dag
+      let matches = false
+      if (pass1.type === 'wekelijks') {
+        matches = new Date(werkdag).getUTCDay() === pass1.dag_index
+      } else if (pass1.type === 'maanddag') {
+        const wDay = new Date(werkdag).getUTCDate()
+        const center = pass1.dag_index
+        matches = Math.min(Math.abs(wDay - center), 30 - Math.abs(wDay - center)) <= 1
+      }
+      if (!matches) return d
+      n_gecorrigeerd++
+      return werkdag
+    })
+    // Pass 3: dedupliceer opnieuw (correcties kunnen dupes opleveren) en bepaal definitieve dag
+    const uniekGecorrigeerd = [...new Set(gecorrigeerd)].sort()
+    return { dag: bepaalDagUitDatums(uniekGecorrigeerd), n_gecorrigeerd }
   }
 
-  // 2) Dag-van-de-week mode
-  const dowCounts = new Array(7).fill(0)
-  for (const d of sorted) dowCounts[new Date(d).getUTCDay()]++
-  let bestDow = 0
-  for (let i = 1; i < 7; i++) if (dowCounts[i] > dowCounts[bestDow]) bestDow = i
-  const weeklyFit = dowCounts[bestDow] / n
+  // Splits in oud (maand 12 t/m 4) en nieuw (laatste 3 mnd) venster.
+  const recencyCutoff = today.getTime() - STANDAARD_BETAALDAG_NIEUW_VENSTER_DAGEN * oneDay
+  const oudRaw = inWindowRaw.filter((d) => new Date(d).getTime() < recencyCutoff)
+  const nieuwRaw = inWindowRaw.filter((d) => new Date(d).getTime() >= recencyCutoff)
 
-  // 3) Interval-patroon — mediaan van gaps + ±2-window
-  const intervals = []
-  for (let i = 1; i < sorted.length; i++) intervals.push(daysBetween(sorted[i], sorted[i - 1]))
-  const sortedIntervals = [...intervals].sort((a, b) => a - b)
-  const medianInterval = sortedIntervals[Math.floor(sortedIntervals.length / 2)]
-  const intervalFit =
-    intervals.length > 0
-      ? intervals.filter((iv) => Math.abs(iv - medianInterval) <= 2).length / intervals.length
-      : 0
+  const { dag: dagFull, n_gecorrigeerd: nGecorrigeerd } = correctieFor(inWindowRaw)
+  const { dag: dagOud } = correctieFor(oudRaw)
+  const { dag: dagNieuw } = correctieFor(nieuwRaw)
 
-  const isEndMonth = bestMonthlyDay >= 25 || bestMonthlyDay <= 5
-  const dowLabel = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag'][
-    bestDow
-  ]
+  // Patroon-verschuiving: beide periodes hebben zelfstandig een dag, maar
+  // op verschillende dagen. Schakel automatisch over op het nieuwe patroon.
+  const isShift =
+    dagOud?.passes &&
+    dagNieuw?.passes &&
+    (dagOud.type !== dagNieuw.type ||
+      dagOud.dag_index !== dagNieuw.dag_index)
 
-  const candidates = [
-    {
-      pattern_type: isEndMonth ? 'einde_maand' : 'maandelijks',
-      pattern_value: isEndMonth ? 'rond einde/begin van de maand' : `rond dag ${bestMonthlyDay}`,
-      fit_pct: bestMonthlyFit,
-    },
-    { pattern_type: 'wekelijks', pattern_value: dowLabel, fit_pct: weeklyFit },
-    { pattern_type: 'interval', pattern_value: `elke ~${medianInterval} dagen`, fit_pct: intervalFit },
-  ]
-  candidates.sort((a, b) => b.fit_pct - a.fit_pct)
-  const best = candidates[0]
+  const actief = isShift ? dagNieuw : dagFull
 
-  let confidence
-  if (best.fit_pct >= 0.8 && n >= 6) confidence = 'hoog'
-  else if (best.fit_pct >= 0.5 && n >= 4) confidence = 'middel'
-  else confidence = 'geen'
+  const verschuiving = isShift
+    ? {
+        van_type: dagOud.type,
+        van_waarde: dagOud.waarde,
+        van_fit_pct: Math.round(dagOud.fit * 100),
+        van_hits: dagOud.hits,
+        van_n: dagOud.n,
+        naar_type: dagNieuw.type,
+        naar_waarde: dagNieuw.waarde,
+        naar_fit_pct: Math.round(dagNieuw.fit * 100),
+        naar_hits: dagNieuw.hits,
+        naar_n: dagNieuw.n,
+        sinds_dagen: STANDAARD_BETAALDAG_NIEUW_VENSTER_DAGEN,
+      }
+    : null
 
-  if (confidence === 'geen') {
+  const fullMeta = {
+    payments_observed: actief?.n ?? nTotaal,
+    payments_observed_totaal: nTotaal,
+    feestdag_correcties_toegepast: nGecorrigeerd,
+    ...baseMeta,
+    verschuiving,
+  }
+
+  if (!actief || !actief.passes) {
+    const reden =
+      nTotaal < STANDAARD_BETAALDAG_MIN_HITS
+        ? `Te weinig betalingen (${nTotaal}) — minimaal ${STANDAARD_BETAALDAG_MIN_HITS} hits op één dag nodig.`
+        : `Sterkste optie (${actief?.waarde ?? 'n.v.t.'}) haalt ${actief ? actief.hits : 0} hits op ${actief ? Math.round(actief.fit * 100) : 0}% — onvoldoende voor een betrouwbare dag.`
     return {
       pattern_type: 'geen',
       pattern_value: null,
-      fit_pct: Math.round(best.fit_pct * 100),
-      payments_observed: n,
-      confidence,
-      explanation: `Geen consistent patroon (sterkste optie: ${best.pattern_type} ${Math.round(best.fit_pct * 100)}% over ${n} betalingen).`,
+      fit_pct: actief ? Math.round(actief.fit * 100) : 0,
+      hits: actief?.hits ?? 0,
+      confidence: 'geen',
+      ...fullMeta,
+      explanation: `Geen standaard betaaldag. ${reden}`,
     }
   }
 
+  const baseExplanation = `${actief.waarde} — ${actief.hits} van ${actief.n} betalingen (${Math.round(actief.fit * 100)}%) volgen dit patroon.`
+  const shiftSuffix = isShift
+    ? ` Patroon is recent gewijzigd (was ${dagOud.waarde}, nu ${dagNieuw.waarde}); flow gebruikt het nieuwe patroon.`
+    : ''
+
   return {
-    pattern_type: best.pattern_type,
-    pattern_value: best.pattern_value,
-    fit_pct: Math.round(best.fit_pct * 100),
-    payments_observed: n,
-    confidence,
-    explanation: `${best.pattern_value} — ${Math.round(best.fit_pct * 100)}% van ${n} betalingen volgen dit patroon.`,
+    pattern_type: actief.type,
+    pattern_value: actief.waarde,
+    fit_pct: Math.round(actief.fit * 100),
+    hits: actief.hits,
+    confidence: 'hoog',
+    ...fullMeta,
+    explanation: baseExplanation + shiftSuffix,
   }
 }
 
@@ -279,6 +527,22 @@ for (const f of allFacturen) {
   const e = byDeb.get(k)
   e.facturen.push(f)
   if (num(f['Balance amount']) !== 0) e.openFacturen.push(f)
+}
+
+// Fysieke betaaldata per debiteur — uit records met Invoicetype/Documenttype
+// in {Betaling, Terugbetaling, leeg}. Dit zijn de echte cashbewegingen, los
+// van interne reconciliaties (creditnota's wegstrepen tegen facturen op
+// boekhouddagen). Gebruikt door detectPattern voor de standaard-betaaldag.
+const fysiekeBetaaldataByDeb = new Map()
+for (const i of postsData.invoices) {
+  const docType = i['Invoicetype/Documenttype']
+  if (docType === 'Factuur') continue
+  const nr = i.Debtornumber
+  for (const p of i.payments || []) {
+    if (!p.date) continue
+    if (!fysiekeBetaaldataByDeb.has(nr)) fysiekeBetaaldataByDeb.set(nr, [])
+    fysiekeBetaaldataByDeb.get(nr).push(p.date)
+  }
 }
 
 // Netto-omzet per debiteur (ex BTW, creditnota's netto). Voor de
@@ -619,8 +883,11 @@ function debiteurScores(debNr) {
   }
 
   // ---- AI-sub-parameter: standaard betaaldag pattern ----------------------
-  const paymentDates = collectPaymentDates(e.facturen)
-  const pattern = detectPattern(paymentDates)
+  // Op fysieke betalingen (Betaling/Terugbetaling/leeg-records), niet op
+  // Factuur.payments — die laatste bevat interne reconciliaties die geen
+  // klantgedrag zijn.
+  const fysiekeBetaaldata = fysiekeBetaaldataByDeb.get(debNr) ?? []
+  const pattern = detectPattern(fysiekeBetaaldata)
 
   // ---- Aggregaat betaalgedrag --------------------------------------------
   // Gemiddelde van beschikbare sub-scores: DSO altijd, trend + volatiliteit
@@ -965,6 +1232,49 @@ const topTasks = tasks.slice(0, TOP_N)
 const selectionLabel = TOP_N === Infinity ? 'alle' : `top-${TOP_N}`
 console.log(`Taken gegenereerd: ${tasks.length}, ${selectionLabel} geselecteerd (${topTasks.length}).`)
 
+// ----- audit-log -------------------------------------------------------------
+//
+// Twee event-types: patroon-verschuivingen (gedetecteerd door detectPattern)
+// en — in productie — herinnering-verschuivingen (per verschoven herinnering
+// real-time gelogd). Voor het prototype loggen we alleen de patroon-
+// verschuivingen die uit de huidige data zijn afgeleid; herinnering-events
+// komen pas binnen wanneer de flow daadwerkelijk een herinnering verplaatst.
+
+const auditLog = []
+let auditSeq = 0
+const newAuditId = () => `AUDIT-${String(++auditSeq).padStart(6, '0')}`
+
+for (const t of topTasks) {
+  const p = t.potentieel.pattern
+  if (!p || !p.verschuiving) continue
+  const v = p.verschuiving
+  auditLog.push({
+    id: newAuditId(),
+    type: 'patroon_verschoven',
+    debiteurnummer: t.debiteurnummer,
+    detectie_datum: SNAPSHOT,
+    van_patroon: {
+      type: v.van_type,
+      waarde: v.van_waarde,
+      fit_pct: v.van_fit_pct,
+      hits: v.van_hits,
+      totaal: v.van_n,
+    },
+    naar_patroon: {
+      type: v.naar_type,
+      waarde: v.naar_waarde,
+      fit_pct: v.naar_fit_pct,
+      hits: v.naar_hits,
+      totaal: v.naar_n,
+    },
+    flow_actief_patroon: 'naar',
+    venster_nieuw_dagen: v.sinds_dagen,
+  })
+}
+console.log(
+  `Audit-log: ${auditLog.length} patroon-verschuivingen gedetecteerd${auditLog.length ? ` (eerste: ${auditLog[0].debiteurnummer} ${auditLog[0].van_patroon.waarde} → ${auditLog[0].naar_patroon.waarde})` : ''}.`,
+)
+
 // ----- relationele entiteiten (pad B prep) -----------------------------------
 
 const relevantDebNrs = new Set(topTasks.map((t) => t.debiteurnummer))
@@ -1095,6 +1405,7 @@ const out = {
   facturen: facturenOut,
   betalingen: betalingenOut,
   losseBetalingen: losseBetalingenOut,
+  auditLog,
 }
 
 fs.writeFileSync(OUT_FILE, JSON.stringify(out, null, 2))

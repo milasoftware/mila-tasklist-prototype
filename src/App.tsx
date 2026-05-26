@@ -7,10 +7,13 @@ import {
   getFacturen,
   getFacturenVoorDebiteur,
   getLosseBetalingenVoorDebiteur,
+  getAuditVoorDebiteur,
   type Task,
   type Factuur,
   type LosseBetaling,
   type Confidence,
+  type PatternInfo,
+  type AuditEntry,
 } from './data'
 
 // ----- Routing (hash-based, geen library) -----------------------------------
@@ -963,28 +966,6 @@ function volatiliteitPlain(
     : base
 }
 
-// Plain-language voor de pattern-detectie uitkomst.
-function patternPlain(p: {
-  pattern_type: 'maandelijks' | 'einde_maand' | 'wekelijks' | 'interval' | 'geen'
-  pattern_value: string | null
-  fit_pct: number
-  payments_observed: number
-  confidence: 'hoog' | 'middel' | 'geen'
-}): string {
-  if (p.pattern_type === 'geen' || !p.pattern_value) {
-    return `Geen duidelijk betaalmoment — komt onregelmatig binnen.`
-  }
-  const where =
-    p.pattern_type === 'wekelijks'
-      ? `vooral op ${p.pattern_value}`
-      : p.pattern_type === 'einde_maand'
-        ? `rond einde of begin van de maand`
-        : p.pattern_type === 'maandelijks'
-          ? p.pattern_value
-          : p.pattern_value
-  return `Betaalt meestal ${where} — gebeurde zo bij ${p.fit_pct}% van ${p.payments_observed} betalingen.`
-}
-
 // ----- tooltip-builders per score-type --------------------------------------
 //
 // Eén helper per ScoreRing op de detail-pagina. Drempels komen 1-op-1
@@ -1697,6 +1678,184 @@ function getDebtorData(task: Task) {
   return { deb, all, open, openSum, overdueOpen, oudste, taakFacturen, taakIds }
 }
 
+// Korte label voor het standaard-betaaldag patroon. Toont één concrete
+// dag (bv. "elke vrijdag" of "rond de 28e") of "geen standaard betaaldag".
+function standaardBetaaldagLabel(p: PatternInfo): string {
+  if (p.pattern_type === 'geen' || !p.pattern_value) return 'geen standaard betaaldag'
+  return p.pattern_value
+}
+
+// Tooltip voor de standaard-betaaldag stat. Toont hoe het patroon is
+// bepaald (bron, venster, beslisregel, feestdag-correctie) en bij een
+// patroon-verschuiving expliciet welk oud→nieuw is gedetecteerd.
+function tooltipStandaardBetaaldag(p: PatternInfo): React.ReactNode {
+  const hasPattern = p.pattern_type !== 'geen' && p.pattern_value
+  const typeLabel: Record<PatternInfo['pattern_type'], string> = {
+    wekelijks: 'vaste weekdag',
+    maanddag: 'vaste dag van de maand',
+    geen: 'geen',
+  }
+  return (
+    <div className="text-xs">
+      <p className="font-medium text-white text-[12px] mb-1">Standaard betaaldag</p>
+      <p className="text-white/70 text-[11px] leading-snug mb-2">
+        Het ritme waarop deze klant fysiek betaalt. Wordt ook gebruikt door de herinneringsflow:
+        valt een herinnering op deze dag, dan schuift hij één dag op (nooit geskipt).
+      </p>
+      <div className="space-y-1 text-[11px] text-white/80">
+        <div className="flex justify-between gap-3">
+          <span className="text-white/50">Patroon-type</span>
+          <span>{typeLabel[p.pattern_type]}</span>
+        </div>
+        {hasPattern && (
+          <div className="flex justify-between gap-3">
+            <span className="text-white/50">Sterkte</span>
+            <span>
+              {p.hits ?? 0} hits op {p.fit_pct}%
+            </span>
+          </div>
+        )}
+        <div className="flex justify-between gap-3">
+          <span className="text-white/50">Op basis van</span>
+          <span>{p.payments_observed} betaaldagen</span>
+        </div>
+        {p.venster_maanden !== undefined && (
+          <div className="flex justify-between gap-3">
+            <span className="text-white/50">Venster</span>
+            <span>laatste {p.venster_maanden} mnd</span>
+          </div>
+        )}
+        {p.min_hits !== undefined && p.min_fit_pct !== undefined && (
+          <div className="flex justify-between gap-3">
+            <span className="text-white/50">Beslisregel</span>
+            <span>
+              ≥{p.min_hits} hits + ≥{p.min_fit_pct}% (of {p.perfect_min_hits ?? 3}× 100%)
+            </span>
+          </div>
+        )}
+        {p.feestdag_correctie && (
+          <div className="flex justify-between gap-3">
+            <span className="text-white/50">Correctie</span>
+            <span>feestdagen NL/BE/TARGET</span>
+          </div>
+        )}
+      </div>
+      {p.verschuiving && (
+        <div className="mt-2 pt-2 border-t border-white/20 bg-amber-500/10 -mx-3 -mb-3 px-3 pb-3 rounded-b-md">
+          <p className="text-amber-200 font-medium text-[11px] mb-1">⚠ Patroon recent gewijzigd</p>
+          <p className="text-white/80 text-[11px] leading-snug">
+            Was <span className="font-medium">{p.verschuiving.van_waarde}</span> ({p.verschuiving.van_fit_pct}% over {p.verschuiving.van_n} betalingen), is nu <span className="font-medium">{p.verschuiving.naar_waarde}</span> ({p.verschuiving.naar_fit_pct}% over {p.verschuiving.naar_n} betalingen in de laatste {Math.round(p.verschuiving.sinds_dagen / 30)} mnd). Flow stuurt op het nieuwe patroon.
+          </p>
+        </div>
+      )}
+      <p className="text-white/80 text-[11px] leading-snug pt-2 mt-2 border-t border-white/20">
+        {p.explanation}
+      </p>
+    </div>
+  )
+}
+
+// Stat-cel met info-icoon dat een tooltip toont bij hover. Gebruikt
+// hetzelfde group/group-hover-mechanisme als ScoreRing.
+function StatWithTooltip({
+  value,
+  tone,
+  tooltip,
+}: {
+  value: React.ReactNode
+  tone?: 'normal' | 'muted'
+  tooltip: React.ReactNode
+}) {
+  return (
+    <div className="group relative inline-flex items-center gap-1">
+      <span className={tone === 'muted' ? 'text-slate-500' : ''}>{value}</span>
+      <span
+        className="inline-flex w-3.5 h-3.5 items-center justify-center rounded-full bg-slate-200 text-slate-600 text-[9px] font-semibold cursor-help select-none"
+        aria-label="meer informatie"
+      >
+        i
+      </span>
+      <div
+        className="absolute right-0 top-full mt-2 hidden group-hover:block z-20 bg-slate-900 text-white rounded-md p-3 shadow-xl pointer-events-none"
+        style={{ width: 320 }}
+      >
+        {tooltip}
+      </div>
+    </div>
+  )
+}
+
+// Audit-log voor één debiteur — toont alle automatische beslissingen die
+// het systeem voor deze klant heeft genomen (nu alleen patroon-verschuivingen;
+// in productie ook elke verschoven herinnering).
+function AutomatischeBeslissingen({ debiteurnummer }: { debiteurnummer: string }) {
+  const entries = getAuditVoorDebiteur(debiteurnummer)
+  if (entries.length === 0) return null
+
+  const fmtNlDate = (iso: string) =>
+    new Date(iso).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' })
+
+  const renderEntry = (e: AuditEntry) => {
+    if (e.type === 'patroon_verschoven') {
+      return (
+        <div key={e.id} className="flex items-start gap-3 py-2 border-t border-slate-100 first:border-t-0">
+          <span className="text-[10px] uppercase tracking-wide bg-amber-50 text-amber-700 ring-1 ring-amber-200 rounded px-1.5 py-0.5 mt-0.5">
+            Patroon gewijzigd
+          </span>
+          <div className="flex-1 text-sm">
+            <p className="text-slate-800">
+              Standaard betaaldag van <span className="font-medium">{e.van_patroon.waarde}</span> naar{' '}
+              <span className="font-medium">{e.naar_patroon.waarde}</span>
+            </p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Was {e.van_patroon.fit_pct}% ({e.van_patroon.hits}/{e.van_patroon.totaal}) over 9 mnd
+              · is nu {e.naar_patroon.fit_pct}% ({e.naar_patroon.hits}/{e.naar_patroon.totaal}) over
+              laatste {Math.round(e.venster_nieuw_dagen / 30)} mnd · herinneringsflow gebruikt het
+              nieuwe patroon
+            </p>
+          </div>
+          <span className="text-xs text-slate-400 whitespace-nowrap tabular-nums">
+            {fmtNlDate(e.detectie_datum)}
+          </span>
+        </div>
+      )
+    }
+    if (e.type === 'herinnering_verschoven') {
+      return (
+        <div key={e.id} className="flex items-start gap-3 py-2 border-t border-slate-100 first:border-t-0">
+          <span className="text-[10px] uppercase tracking-wide bg-sky-50 text-sky-700 ring-1 ring-sky-200 rounded px-1.5 py-0.5 mt-0.5">
+            Herinnering verschoven
+          </span>
+          <div className="flex-1 text-sm">
+            <p className="text-slate-800">
+              {fmtNlDate(e.originele_datum)} → {fmtNlDate(e.verschoven_naar)}
+            </p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Viel op standaard betaaldag ({e.pattern_snapshot.waarde}) — herinnering schuift 1 dag
+              op
+            </p>
+          </div>
+          <span className="text-xs text-slate-400 whitespace-nowrap tabular-nums">
+            {fmtNlDate(e.beslis_datum)}
+          </span>
+        </div>
+      )
+    }
+    return null
+  }
+
+  return (
+    <section className="border border-slate-200 rounded-md p-4">
+      <h4 className="font-medium text-slate-900 mb-2">Automatische beslissingen</h4>
+      <p className="text-xs text-slate-500 mb-2">
+        Wijzigingen die het systeem voor deze klant heeft doorgevoerd op basis van geleerd
+        betaalgedrag.
+      </p>
+      <div>{entries.map(renderEntry)}</div>
+    </section>
+  )
+}
+
 // Compacte horizontale stats-bar — verving de gecombineerde DebtorContext.
 // Toont kerngegevens zonder de factuur-tabellen.
 function DebtorStatsBar({ task, showSources }: { task: Task; showSources: boolean }) {
@@ -1740,6 +1899,30 @@ function DebtorStatsBar({ task, showSources }: { task: Task; showSources: boolea
       </span>
     ),
   })
+  const pattern = task.potentieel.pattern
+  if (pattern) {
+    const isGeen = pattern.pattern_type === 'geen'
+    const isShift = !!pattern.verschuiving
+    stats.push({
+      label: 'Standaard betaaldag',
+      value: (
+        <StatWithTooltip
+          tone={isGeen ? 'muted' : 'normal'}
+          value={
+            <span>
+              {standaardBetaaldagLabel(pattern)}
+              {isShift && (
+                <span className="text-amber-600 text-xs ml-1" title="Patroon recent gewijzigd">
+                  ⚠ wijzigt
+                </span>
+              )}
+            </span>
+          }
+          tooltip={tooltipStandaardBetaaldag(pattern)}
+        />
+      ),
+    })
+  }
   if (dso && dso.invoice_count > 0) {
     stats.push({
       label: 'DSO na vervaldatum',
@@ -1991,6 +2174,9 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
       {/* Compacte stats-bar */}
       <DebtorStatsBar task={task} showSources={showSources} />
 
+      {/* Audit-log: alleen tonen als er beslissingen geregistreerd zijn */}
+      <AutomatischeBeslissingen debiteurnummer={task.debiteurnummer ?? ''} />
+
       {/* Score-grid: 3 kolommen voor Impact, Urgentie, Potentieel */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <ComponentBlock
@@ -2100,28 +2286,10 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
             activeScore={task.potentieel.score}
             dsoImpact={task.potentieel.dso_impact_euro_dagen ?? 0}
           />
-          {task.potentieel.pattern && (
-            <div className="pt-2 border-t border-slate-100 mt-2">
-              <div className="flex items-center justify-between gap-2 text-xs">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-slate-700">Wanneer betaalt deze klant meestal?</span>
-                  <ConfidencePill value={task.potentieel.pattern.confidence} />
-                </div>
-                {showSources && (
-                  <span className="text-slate-400 font-mono text-[10px]">
-                    {task.potentieel.pattern.pattern_type}
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                {patternPlain(task.potentieel.pattern)}
-              </p>
-            </div>
-          )}
           {showSources && (
             <SourceLine>
-              standaard_betaaldag pattern recognition (clustering op factuur+betaling),
-              debiteur.standaard_betaaltermijn
+              fysieke_betalingen → pattern recognition (zie debiteur-context bovenaan voor
+              standaard betaaldag), debiteur.standaard_betaaltermijn
             </SourceLine>
           )}
         </ComponentBlock>

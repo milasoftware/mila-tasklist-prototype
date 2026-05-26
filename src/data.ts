@@ -116,13 +116,93 @@ export type BetaalgedragBreakdown = {
 }
 
 export type PatternInfo = {
-  pattern_type: 'maandelijks' | 'einde_maand' | 'wekelijks' | 'interval' | 'geen'
+  // v3: alleen 'wekelijks' (vaste weekdag) of 'maanddag' (vaste dag van de
+  // maand ±1) komen als gekozen patroon naar voren. 'geen' = onder de
+  // beslisregel of te weinig data. De legacy types 'maandelijks',
+  // 'einde_maand' en 'interval' zijn geschrapt: ze leveren geen concrete
+  // dag op die we in de UI of herinneringsflow kunnen gebruiken.
+  pattern_type: 'wekelijks' | 'maanddag' | 'geen'
   pattern_value: string | null
   fit_pct: number
+  hits?: number
   payments_observed: number
+  payments_observed_totaal?: number
   confidence: Confidence
   explanation: string
+  // Standaard-betaaldag-metadata: bron + spelregels van de detectie,
+  // gebruikt om de tooltip te onderbouwen.
+  bron?: 'fysieke_betalingen'
+  venster_maanden?: number
+  nieuw_venster_dagen?: number
+  min_hits?: number
+  min_fit_pct?: number
+  perfect_min_hits?: number
+  feestdag_correctie?: boolean
+  // Aantal betalingen waarop selectieve feestdag/weekend-correctie
+  // daadwerkelijk is toegepast (= verschoven naar werkdag vóór een
+  // non-werkdag-reeks omdat die werkdag bij de dominante dag past).
+  feestdag_correcties_toegepast?: number
+  // Recent gedetecteerde patroon-verschuiving (oude 9 mnd vs laatste 3 mnd
+  // verschillen in dominante dag). Bij aanwezig: pattern_value reflecteert
+  // het nieuwe patroon (flow stuurt automatisch op het nieuwe gedrag).
+  verschuiving?: PatroonVerschuiving | null
 }
+
+export type PatroonVerschuiving = {
+  van_type: 'wekelijks' | 'maanddag'
+  van_waarde: string
+  van_fit_pct: number
+  van_hits: number
+  van_n: number
+  naar_type: 'wekelijks' | 'maanddag'
+  naar_waarde: string
+  naar_fit_pct: number
+  naar_hits: number
+  naar_n: number
+  sinds_dagen: number
+}
+
+// ----- audit-log -------------------------------------------------------------
+//
+// Twee event-types. patroon_verschoven wordt door preprocess gegenereerd
+// op het moment dat detectPattern een verschuiving signaleert. In productie
+// komt herinnering_verschoven daar real-time bij — die wordt in dit
+// prototype niet door preprocess gegenereerd omdat we de herinneringsflow
+// nog niet uitvoeren.
+
+export type AuditPatroonSnapshot = {
+  type: 'wekelijks' | 'maanddag'
+  waarde: string
+  fit_pct: number
+  hits: number
+  totaal: number
+}
+
+export type AuditPatroonVerschoven = {
+  id: string
+  type: 'patroon_verschoven'
+  debiteurnummer: string
+  detectie_datum: string
+  van_patroon: AuditPatroonSnapshot
+  naar_patroon: AuditPatroonSnapshot
+  flow_actief_patroon: 'van' | 'naar'
+  venster_nieuw_dagen: number
+}
+
+export type AuditHerinneringVerschoven = {
+  id: string
+  type: 'herinnering_verschoven'
+  taak_id: string
+  debiteurnummer: string
+  originele_datum: string
+  verschoven_naar: string
+  reden: 'standaard_betaaldag_match'
+  pattern_snapshot: AuditPatroonSnapshot
+  beslis_systeem: 'auto'
+  beslis_datum: string
+}
+
+export type AuditEntry = AuditPatroonVerschoven | AuditHerinneringVerschoven
 
 // Relationele entiteiten (nog niet gebruikt door UI — voor pad B)
 export type Debiteur = {
@@ -252,6 +332,8 @@ export const betalingen: Betaling[] = generated.betalingen as Betaling[]
 export const losseBetalingen: LosseBetaling[] = (generated as { losseBetalingen?: LosseBetaling[] })
   .losseBetalingen ?? []
 export const meta: Meta = generated.meta as Meta
+export const auditLog: AuditEntry[] =
+  ((generated as { auditLog?: AuditEntry[] }).auditLog ?? []) as AuditEntry[]
 
 // Lookup-helpers — gebruikt door UI voor het renderen van debiteur-historie
 // in het detailpaneel.
@@ -286,3 +368,14 @@ export const getBetalingenVoorDebiteur = (debiteurnummer: string): Betaling[] =>
   betalingenByDebiteur.get(debiteurnummer) ?? []
 export const getLosseBetalingenVoorDebiteur = (debiteurnummer: string): LosseBetaling[] =>
   losseBetalingenByDebiteur.get(debiteurnummer) ?? []
+
+// Audit-log lookup per debiteur — voor "Automatische beslissingen"-sectie
+// in het detailpaneel.
+const auditByDebiteur = new Map<string, AuditEntry[]>()
+for (const e of auditLog) {
+  const nr = e.debiteurnummer
+  if (!auditByDebiteur.has(nr)) auditByDebiteur.set(nr, [])
+  auditByDebiteur.get(nr)!.push(e)
+}
+export const getAuditVoorDebiteur = (debiteurnummer: string): AuditEntry[] =>
+  auditByDebiteur.get(debiteurnummer) ?? []
