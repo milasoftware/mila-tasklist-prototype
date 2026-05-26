@@ -1510,6 +1510,9 @@ function tooltipKrediet(
 
 function TaskRow({ task, selected, onClick }: { task: Task; selected: boolean; onClick: () => void }) {
   const factuurCount = task.gerelateerde_facturen?.length ?? (task.factuurnummer ? 1 : 0)
+  const pattern = task.potentieel?.pattern
+  const heeftPatroon = pattern && pattern.pattern_type !== 'geen' && pattern.pattern_value
+  const betaaldagLabel = pattern ? standaardBetaaldagLabel(pattern) : 'geen standaard betaaldag'
   return (
     <button
       onClick={onClick}
@@ -1547,6 +1550,39 @@ function TaskRow({ task, selected, onClick }: { task: Task; selected: boolean; o
           </div>
           <p className="text-sm text-slate-700 mt-0.5 truncate">{task.taakomschrijving}</p>
           <p className="text-xs text-slate-500 mt-1 truncate">{task.aanleiding}</p>
+        </div>
+        <div className="shrink-0 hidden md:flex items-center gap-10 pl-4">
+          <div
+            className={`shrink-0 w-14 h-14 rounded-md ring-1 flex flex-col items-center justify-center ${priorityTone(
+              task.risico.score,
+            )}`}
+          >
+            <span className="text-lg font-semibold tabular-nums leading-none">
+              {fmtNL(task.risico.score, 1)}
+            </span>
+            <span className="text-[10px] uppercase tracking-wide opacity-70 mt-1">risico</span>
+          </div>
+          <div className="shrink-0 w-40 text-right">
+            <div className="text-[10px] uppercase tracking-wide text-slate-500 leading-none">
+              Betaaldag
+            </div>
+            <div
+              className={`text-sm leading-tight mt-1 truncate ${
+                heeftPatroon ? 'text-slate-700' : 'text-slate-400 italic'
+              }`}
+              title={betaaldagLabel}
+            >
+              {heeftPatroon ? betaaldagLabel : '—'}
+              {pattern?.verschuiving && (
+                <span
+                  className="ml-1 text-amber-600"
+                  title={`Patroon recent gewijzigd: was ${pattern.verschuiving.van_waarde}`}
+                >
+                  ⚠
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </button>
