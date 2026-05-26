@@ -820,18 +820,29 @@ function PriorityRing({ task }: { task: Task }) {
           ? 'text-amber-400'
           : 'text-slate-400'
 
+  // Bij potentieel zonder data (= score null) gebruikt het preprocess-
+  // script intern de neutrale waarde 3 om de priority te kunnen berekenen.
+  // Hier doen we hetzelfde, maar tonen het in de breakdown wel als
+  // "onbekend" zodat duidelijk is dat dit een neutrale aanname is.
+  const potentieelScore = task.potentieel.score
+  const potentieelVoorCalc = potentieelScore ?? 3
   const calc = {
     impact: task.impact.score * WEIGHTS.impact,
     urgentie: task.urgentie.score * WEIGHTS.urgentie,
     risico: task.risico.score * WEIGHTS.risico,
-    potentieel: task.potentieel.score * WEIGHTS.potentieel,
+    potentieel: potentieelVoorCalc * WEIGHTS.potentieel,
   }
 
-  const rows: { label: string; score: number; pct: number; bijdrage: number }[] = [
+  const rows: { label: string; score: number | null; pct: number; bijdrage: number }[] = [
     { label: 'Hoeveel levert dit op', score: task.impact.score, pct: 40, bijdrage: calc.impact },
     { label: 'Hoe dringend', score: task.urgentie.score, pct: 30, bijdrage: calc.urgentie },
     { label: 'Hoe risicovol', score: task.risico.score, pct: 20, bijdrage: calc.risico },
-    { label: 'Hoeveel sneller mogelijk', score: task.potentieel.score, pct: 10, bijdrage: calc.potentieel },
+    {
+      label: 'Hoeveel sneller mogelijk',
+      score: potentieelScore,
+      pct: 10,
+      bijdrage: calc.potentieel,
+    },
   ]
 
   return (
@@ -884,7 +895,9 @@ function PriorityRing({ task }: { task: Task }) {
               <tr key={r.label}>
                 <td className="text-white/80 pr-2 py-0.5">{r.label}</td>
                 <td className="text-white/60 text-right whitespace-nowrap px-2">
-                  {fmtNL(r.score, r.score % 1 === 0 ? 0 : 1)} × {r.pct}%
+                  {r.score === null
+                    ? `onbekend (gerekend als 3) × ${r.pct}%`
+                    : `${fmtNL(r.score, r.score % 1 === 0 ? 0 : 1)} × ${r.pct}%`}
                 </td>
                 <td className="text-right whitespace-nowrap pl-2">{fmtNL(r.bijdrage, 2)}</td>
               </tr>
@@ -1014,9 +1027,9 @@ function tooltipUrgentie(score: number, dagenVervallen: number | undefined): Rea
 }
 
 function tooltipPotentieel(
-  score: number,
-  dsoImpact: number | undefined,
-  beinvloedbareDagen: number | undefined,
+  score: number | null,
+  dsoImpact: number | null | undefined,
+  beinvloedbareDagen: number | null | undefined,
   totalOpen: number | undefined,
 ): React.ReactNode {
   const pb = meta.potentieel_buckets
@@ -1026,9 +1039,11 @@ function tooltipPotentieel(
   const fmtED = (n: number) =>
     `${Math.round(n).toLocaleString('nl-NL')} euro-dagen`
   const currentTxt =
-    dsoImpact !== undefined && beinvloedbareDagen !== undefined && totalOpen !== undefined
-      ? `${beinvloedbareDagen}d beïnvloedbaar × ${fmtEUR(totalOpen)} = ${fmtED(dsoImpact)} → score ${score}`
-      : undefined
+    score === null
+      ? 'Geen betaalhistorie — werkelijke termijn niet te bepalen, score is onbekend.'
+      : dsoImpact != null && beinvloedbareDagen != null && totalOpen !== undefined
+        ? `${beinvloedbareDagen}d beïnvloedbaar × ${fmtEUR(totalOpen)} = ${fmtED(dsoImpact)} → score ${score}`
+        : undefined
   return (
     <ScoreTooltip
       title="Hoeveel sneller kan deze klant betalen"
@@ -2089,7 +2104,7 @@ function ComponentBlock({
   tooltip,
 }: {
   title: string
-  score: number
+  score: number | null
   lead?: React.ReactNode
   children: React.ReactNode
   tooltip?: React.ReactNode
@@ -2173,7 +2188,7 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
     impact: task.impact.score * WEIGHTS.impact,
     urgentie: task.urgentie.score * WEIGHTS.urgentie,
     risico: task.risico.score * WEIGHTS.risico,
-    potentieel: task.potentieel.score * WEIGHTS.potentieel,
+    potentieel: (task.potentieel.score ?? 3) * WEIGHTS.potentieel,
   }
   const total = calc.impact + calc.urgentie + calc.risico + calc.potentieel
 
@@ -2287,6 +2302,19 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
             const beinvl = task.potentieel.beinvloedbare_dagen ?? 0
             const impact = task.potentieel.dso_impact_euro_dagen ?? 0
             const totalOpen = task.risico.krediet_openstaand
+            const heeftHistorie = task.potentieel.werkelijke_dagen !== null
+            if (!heeftHistorie) {
+              return (
+                <p className="text-slate-600">
+                  Deze klant heeft nog geen enkele factuur volledig betaald — daarom kunnen we
+                  de werkelijke betaaltermijn niet meten. Afgesproken is{' '}
+                  <span className="font-medium text-slate-800">
+                    {task.potentieel.afgesproken_dagen} dagen
+                  </span>
+                  . Zodra de eerste betaling binnen is, wordt het potentieel berekend.
+                </p>
+              )
+            }
             return (
               <p className="text-slate-600">
                 Deze klant betaalt normaal {task.potentieel.werkelijke_dagen} dagen na de
@@ -2318,10 +2346,12 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
               </p>
             )
           })()}
-          <PotentieelImpactBar
-            activeScore={task.potentieel.score}
-            dsoImpact={task.potentieel.dso_impact_euro_dagen ?? 0}
-          />
+          {task.potentieel.score !== null && (
+            <PotentieelImpactBar
+              activeScore={task.potentieel.score}
+              dsoImpact={task.potentieel.dso_impact_euro_dagen ?? 0}
+            />
+          )}
           {showSources && (
             <SourceLine>
               fysieke_betalingen → pattern recognition (zie debiteur-context bovenaan voor
@@ -2573,7 +2603,11 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
             <span className="text-slate-400">× 20%</span>
             <span className="text-slate-700 text-right">{fmtNL(calc.risico, 2)}</span>
             <span className="text-slate-600">Hoeveel sneller mogelijk</span>
-            <span className="text-slate-500">{fmtNL(task.potentieel.score, 0)}</span>
+            <span className="text-slate-500">
+              {task.potentieel.score === null
+                ? 'onbekend (3)'
+                : fmtNL(task.potentieel.score, 0)}
+            </span>
             <span className="text-slate-400">× 10%</span>
             <span className="text-slate-700 text-right">{fmtNL(calc.potentieel, 2)}</span>
             <span className="text-slate-900 font-medium border-t border-slate-200 pt-1.5 mt-1">
@@ -2587,8 +2621,9 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           {showSources && (
             <p className="font-mono text-xs text-slate-400 mt-3">
               ({fmtNL(task.impact.score, 1)} × 0,4) + ({fmtNL(task.urgentie.score, 0)} × 0,3) + (
-              {fmtNL(task.risico.score, 1)} × 0,2) + ({fmtNL(task.potentieel.score, 0)} × 0,1) ={' '}
-              {fmtNL(total, 2)}
+              {fmtNL(task.risico.score, 1)} × 0,2) + (
+              {task.potentieel.score === null ? '3 (onbekend)' : fmtNL(task.potentieel.score, 0)} ×
+              0,1) = {fmtNL(total, 2)}
             </p>
           )}
         </section>

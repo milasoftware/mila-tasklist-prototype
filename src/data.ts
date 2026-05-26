@@ -73,12 +73,15 @@ export type Task = {
     betaalgedrag_breakdown?: BetaalgedragBreakdown
   }
   potentieel: {
-    score: number
-    werkelijke_dagen: number
+    // Score is null wanneer er geen enkele volledig betaalde factuur in
+    // de historie zit. Dan kunnen we de werkelijke betaaltermijn niet
+    // bepalen en zijn alle afgeleide velden ook null.
+    score: number | null
+    werkelijke_dagen: number | null
     afgesproken_dagen: number
-    term_diff_dagen?: number
-    beinvloedbare_dagen?: number
-    dso_impact_euro_dagen?: number
+    term_diff_dagen?: number | null
+    beinvloedbare_dagen?: number | null
+    dso_impact_euro_dagen?: number | null
     haalbaarheidsdrempel_dagen?: number
     reden: string
     pattern?: PatternInfo
@@ -293,6 +296,9 @@ export type Meta = {
     min: number
     max: number
     populatie_debiteuren: number // alleen debiteuren met vervallen debet
+    // Aantal debiteuren met vervallen debet maar zonder enkele volledig
+    // betaalde factuur — die kunnen we niet in een bucket plaatsen.
+    geen_betaalhistorie?: number
     haalbaarheidsdrempel_dagen: number
   }
   total_facturen: number

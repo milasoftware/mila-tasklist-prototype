@@ -754,8 +754,16 @@ function potentieelScoreFor(dsoImpact) {
 }
 const potBucketCounts = [0, 0, 0, 0, 0]
 let potPopulatieB = 0
+let potGeenHistorie = 0
 for (const d of potentieelPerDeb.values()) {
   if (!d.hasOverdueDebet) continue
+  // Debiteuren zonder enkele volledig betaalde factuur tellen niet mee in
+  // de buckets — we kunnen ze niet eerlijk indelen op DSO-impact want we
+  // weten hun werkelijke betaaltermijn niet.
+  if (d.paidCount === 0) {
+    potGeenHistorie++
+    continue
+  }
   potPopulatieB++
   potBucketCounts[potentieelScoreFor(d.dsoImpact) - 1]++
 }
@@ -765,6 +773,7 @@ const potentieelBuckets = {
   min: round(potentieelPopulatie[0] ?? 0, 0),
   max: round(potentieelPopulatie[potentieelPopulatie.length - 1] ?? 0, 0),
   populatie_debiteuren: potPopulatieB,
+  geen_betaalhistorie: potGeenHistorie,
   haalbaarheidsdrempel_dagen: DSO_HAALBAARHEIDSDREMPEL_DAGEN,
 }
 
@@ -960,13 +969,20 @@ function debiteurScores(debNr) {
   // Werkelijke vs afgesproken termijn + DSO-impact zijn al pre-berekend
   // in `potentieelPerDeb` (we hadden de drempels nodig vóórdat we de score
   // per debiteur kunnen toekennen). Hier alleen de score-toekenning.
+  // Bij nul historische betalingen kunnen we de werkelijke termijn niet
+  // weten; dan vallen alle afgeleide velden op null en is de score zelf
+  // ook null (= onbekend). Voorheen werd in dat geval een vals "score 1"
+  // gerapporteerd omdat de fallback medianActual = medianAgreed voor een
+  // term_diff van 0 zorgde — alsof de klant netjes binnen marge betaalt
+  // terwijl we daarover geen enkel bewijs hebben.
   const potData = potentieelPerDeb.get(debNr)
+  const heeftBetaalhistorie = !!potData && potData.paidCount > 0
   const medianAgreed = potData?.medianAgreed ?? 30
-  const medianActual = potData?.medianActual ?? medianAgreed
-  const termDiff = potData?.termDiff ?? 0
-  const beinvloedbareDagen = potData?.beinvloedbareDagen ?? 0
-  const dsoImpact = potData?.dsoImpact ?? 0
-  const potentieel = potentieelScoreFor(dsoImpact)
+  const medianActual = heeftBetaalhistorie ? potData.medianActual : null
+  const termDiff = heeftBetaalhistorie ? potData.termDiff : null
+  const beinvloedbareDagen = heeftBetaalhistorie ? potData.beinvloedbareDagen : null
+  const dsoImpact = heeftBetaalhistorie ? potData.dsoImpact : null
+  const potentieel = heeftBetaalhistorie ? potentieelScoreFor(dsoImpact) : null
 
   // Krediet — onverzekerd bedrag (openstaand − CreditInformationCreditlimit).
   // Sub 1: onverzekerd % via vaste drempels (1-5). Sub 2: onverzekerd in €
@@ -1171,8 +1187,13 @@ for (const c of taskCandidates) {
   const impactScore = bedragScore
   const urgentie = urgentieScore(c.oudste)
 
+  // Potentieel kan null zijn (= geen betaalhistorie, score onbekend).
+  // Voor de priority-berekening vallen we dan terug op 3 (neutraal,
+  // midden van de 1-5 schaal) zodat een onbekend potentieel een taak
+  // niet kunstmatig kleiner of groter maakt.
+  const potentieelVoorPriority = scores.potentieel ?? 3
   const priority =
-    impactScore * 0.4 + urgentie * 0.3 + scores.risicoScore * 0.2 + scores.potentieel * 0.1
+    impactScore * 0.4 + urgentie * 0.3 + scores.risicoScore * 0.2 + potentieelVoorPriority * 0.1
 
   const factuurCount = c.items.length
   const gerelateerdeFacturen = c.items.map((x) => x.f.Invoicenumber)
@@ -1244,14 +1265,17 @@ for (const c of taskCandidates) {
       score: scores.potentieel,
       werkelijke_dagen: scores.medianActual,
       afgesproken_dagen: scores.medianAgreed,
-      term_diff_dagen: scores.medianActual - scores.medianAgreed,
+      term_diff_dagen:
+        scores.medianActual !== null ? scores.medianActual - scores.medianAgreed : null,
       beinvloedbare_dagen: scores.beinvloedbareDagen,
-      dso_impact_euro_dagen: round(scores.dsoImpact, 0),
+      dso_impact_euro_dagen: scores.dsoImpact !== null ? round(scores.dsoImpact, 0) : null,
       haalbaarheidsdrempel_dagen: DSO_HAALBAARHEIDSDREMPEL_DAGEN,
       reden:
-        scores.dsoCount > 0
-          ? `Werkelijke termijn ${scores.medianActual}d vs afgesproken ${scores.medianAgreed}d, mediaan over ${scores.dsoCount} volledig betaalde facturen.`
-          : `Geen volledig betaalde facturen in historie; potentieel afgeleid uit beschikbare data.`,
+        scores.potentieel === null
+          ? `Geen volledig betaalde facturen in historie — werkelijke betaaltermijn is nog onbekend en kan pas worden berekend zodra deze klant minimaal één factuur heeft voldaan.`
+          : scores.dsoCount > 0
+            ? `Werkelijke termijn ${scores.medianActual}d vs afgesproken ${scores.medianAgreed}d, mediaan over ${scores.dsoCount} volledig betaalde facturen in de afgelopen 12 maanden.`
+            : `Werkelijke termijn ${scores.medianActual}d vs afgesproken ${scores.medianAgreed}d, mediaan over ${scores.paidCount} volledig betaalde facturen (geen daarvan in de laatste 12 maanden).`,
       pattern: scores.pattern,
     },
   })
