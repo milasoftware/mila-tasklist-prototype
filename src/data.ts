@@ -103,7 +103,13 @@ export type BetaalgedragBreakdown = {
     p_value: number
     months_observed: number
     explanation: string
-    series: { month: string; dso: number }[]
+    // Maanden die meetellen voor de trendlijn. Per maand de mediaan
+    // dagen-te-laat (robuust tegen outliers) en het aantal facturen waarop
+    // dat gebaseerd is. Maanden met < min_facturen_per_maand vallen weg.
+    series: { month: string; dso: number; n: number }[]
+    methode?: 'mediaan_per_maand'
+    min_facturen_per_maand?: number
+    maanden_overgeslagen?: number
   }
   volatiliteit: {
     score: number | null

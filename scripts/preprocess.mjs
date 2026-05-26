@@ -464,8 +464,21 @@ function paymentIntervals(facturenList, sinceMs = null) {
   return intervals
 }
 
-// Bouwt een maandelijkse DSO-tijdreeks: gemiddelde dagen-te-laat van de
-// facturen die in die maand zijn betaald.
+// Minimum aantal facturen per maand om die maand mee te tellen in de
+// DSO-trendlijn. Onder deze drempel is één enkele factuur (vaak een
+// dispuut of incidentele kwijtschelding) zo dominant dat het maandcijfer
+// niets meer zegt over het structurele betaalgedrag. In productie worden
+// disputen apart gelabeld en gefilterd; tot die tijd vangt deze drempel
+// het scenario af.
+const TREND_MIN_FACTUREN_PER_MAAND = 3
+
+// Bouwt een maandelijkse DSO-tijdreeks. Per maand wordt de mediaan
+// dagen-te-laat genomen (robuust tegen één extreem late betaling die
+// het gemiddelde scheef zou trekken). Maanden met minder dan
+// TREND_MIN_FACTUREN_PER_MAAND betaalde facturen worden overgeslagen
+// zodat eenmalige uitschieters niet als trend gelezen worden.
+// Retourneert ook de samples per maand zodat verbruikers (UI, audit)
+// kunnen tonen waarop het cijfer is gebaseerd.
 function monthlyDsoSeries(paidFacturen) {
   const byMonth = new Map()
   for (const f of paidFacturen) {
@@ -477,12 +490,22 @@ function monthlyDsoSeries(paidFacturen) {
     if (!byMonth.has(month)) byMonth.set(month, [])
     byMonth.get(month).push(daysLate)
   }
-  const months = [...byMonth.keys()].sort()
+  const alleMaanden = [...byMonth.keys()].sort()
+  const maandenGenoegFacturen = alleMaanden.filter(
+    (m) => byMonth.get(m).length >= TREND_MIN_FACTUREN_PER_MAAND,
+  )
+  const median = (arr) => {
+    const s = [...arr].sort((a, b) => a - b)
+    const mid = Math.floor(s.length / 2)
+    return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid]
+  }
   return {
-    months,
-    values: months.map(
-      (m) => byMonth.get(m).reduce((a, b) => a + b, 0) / byMonth.get(m).length,
-    ),
+    months: maandenGenoegFacturen,
+    values: maandenGenoegFacturen.map((m) => median(byMonth.get(m))),
+    counts: maandenGenoegFacturen.map((m) => byMonth.get(m).length),
+    maanden_overgeslagen: alleMaanden.length - maandenGenoegFacturen.length,
+    min_facturen_per_maand: TREND_MIN_FACTUREN_PER_MAAND,
+    methode: 'mediaan_per_maand',
   }
 }
 
@@ -1029,7 +1052,14 @@ function debiteurScores(debNr) {
         p_value: round(mk.pValue, 3),
         months_observed: mk.n,
         explanation: trendExplanation,
-        series: monthly.months.map((m, i) => ({ month: m, dso: Math.round(monthly.values[i]) })),
+        series: monthly.months.map((m, i) => ({
+          month: m,
+          dso: Math.round(monthly.values[i]),
+          n: monthly.counts[i],
+        })),
+        methode: monthly.methode,
+        min_facturen_per_maand: monthly.min_facturen_per_maand,
+        maanden_overgeslagen: monthly.maanden_overgeslagen,
       },
       volatiliteit: {
         score: volatiliteitScore,
