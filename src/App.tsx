@@ -50,6 +50,10 @@ const fmtEUR = (n: number) =>
   n.toLocaleString('nl-NL', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
 const fmtNL = (n: number, dec = 1) =>
   n.toLocaleString('nl-NL', { minimumFractionDigits: dec, maximumFractionDigits: dec })
+const fmtDM = (iso: string) => {
+  const d = new Date(iso)
+  return `${String(d.getUTCDate()).padStart(2, '0')}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+}
 
 function priorityTone(p: number) {
   if (p >= 4) return 'bg-red-50 text-red-900 ring-red-200'
@@ -886,30 +890,84 @@ function PriorityRing({ task }: { task: Task }) {
           hij niet overflowt op een full-width container) */}
       <div
         className="absolute right-0 top-full mt-3 hidden group-hover:block z-20 bg-slate-900 text-white rounded-md p-3 text-xs shadow-xl pointer-events-none"
-        style={{ width: 320 }}
+        style={{ width: 340 }}
       >
-        <p className="font-medium mb-2 text-white/90">Opbouw van de priority</p>
-        <table className="w-full tabular-nums">
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.label}>
-                <td className="text-white/80 pr-2 py-0.5">{r.label}</td>
-                <td className="text-white/60 text-right whitespace-nowrap px-2">
-                  {r.score === null
-                    ? `onbekend (gerekend als 3) × ${r.pct}%`
-                    : `${fmtNL(r.score, r.score % 1 === 0 ? 0 : 1)} × ${r.pct}%`}
-                </td>
-                <td className="text-right whitespace-nowrap pl-2">{fmtNL(r.bijdrage, 2)}</td>
-              </tr>
-            ))}
-            <tr className="border-t border-white/20">
-              <td className="font-medium pt-1.5">Totaal</td>
-              <td></td>
-              <td className="font-semibold text-right pt-1.5">{fmtNL(score, 2)}</td>
-            </tr>
-          </tbody>
-        </table>
-        <p className="text-[10px] text-white/60 mt-2">{priorityHint(score)}</p>
+        {task.priority_gedempt && task.voorspelling ? (
+          <>
+            <p className="font-medium mb-1 text-sky-300">
+              Priority gedempt naar 1,0
+            </p>
+            <p className="text-[11px] text-white/80 mb-2 leading-snug">
+              Betaling verwacht op {fmtDM(task.voorspelling.betaaldatum)} (
+              {task.voorspelling.pattern_value}). Demping vervalt zodra het
+              venster (-{task.voorspelling.venster_voor_betaaldag_werkdagen}{' '}
+              t/m +{task.voorspelling.venster_na_betaaldag_werkdagen} werkdagen)
+              verstreken is.
+            </p>
+            <p className="text-[10px] text-white/50 uppercase tracking-wide mb-1">
+              Originele opbouw
+            </p>
+            <table className="w-full tabular-nums opacity-60 line-through">
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.label}>
+                    <td className="text-white/80 pr-2 py-0.5">{r.label}</td>
+                    <td className="text-white/60 text-right whitespace-nowrap px-2">
+                      {r.score === null
+                        ? `onbekend (3) × ${r.pct}%`
+                        : `${fmtNL(r.score, r.score % 1 === 0 ? 0 : 1)} × ${r.pct}%`}
+                    </td>
+                    <td className="text-right whitespace-nowrap pl-2">
+                      {fmtNL(r.bijdrage, 2)}
+                    </td>
+                  </tr>
+                ))}
+                <tr className="border-t border-white/20">
+                  <td className="font-medium pt-1.5">Origineel</td>
+                  <td></td>
+                  <td className="font-semibold text-right pt-1.5">
+                    {fmtNL(task.priority_origineel, 2)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </>
+        ) : (
+          <>
+            <p className="font-medium mb-2 text-white/90">Opbouw van de priority</p>
+            <table className="w-full tabular-nums">
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.label}>
+                    <td className="text-white/80 pr-2 py-0.5">{r.label}</td>
+                    <td className="text-white/60 text-right whitespace-nowrap px-2">
+                      {r.score === null
+                        ? `onbekend (gerekend als 3) × ${r.pct}%`
+                        : `${fmtNL(r.score, r.score % 1 === 0 ? 0 : 1)} × ${r.pct}%`}
+                    </td>
+                    <td className="text-right whitespace-nowrap pl-2">
+                      {fmtNL(r.bijdrage, 2)}
+                    </td>
+                  </tr>
+                ))}
+                <tr className="border-t border-white/20">
+                  <td className="font-medium pt-1.5">Totaal</td>
+                  <td></td>
+                  <td className="font-semibold text-right pt-1.5">{fmtNL(score, 2)}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p className="text-[10px] text-white/60 mt-2">{priorityHint(score)}</p>
+            {task.voorspelling && (
+              <p className="text-[10px] text-white/60 mt-2 border-t border-white/10 pt-2">
+                Verwachte betaaldatum: {fmtDM(task.voorspelling.betaaldatum)} (
+                {task.voorspelling.pattern_value}) — buiten{' '}
+                {task.voorspelling.venster_voor_betaaldag_werkdagen}-werkdagen-venster,
+                geen demping.
+              </p>
+            )}
+          </>
+        )}
       </div>
     </div>
   )
@@ -1622,6 +1680,18 @@ function TaskRow({ task, selected, onClick }: { task: Task; selected: boolean; o
           </div>
           <p className="text-sm text-slate-700 mt-0.5 truncate">{task.taakomschrijving}</p>
           <p className="text-xs text-slate-500 mt-1 truncate">{task.aanleiding}</p>
+          {task.priority_gedempt && task.voorspelling && (
+            <p
+              className="text-[11px] mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 ring-1 ring-sky-200"
+              title={`Verwacht op ${task.voorspelling.pattern_value}. Originele priority was ${fmtNL(
+                task.priority_origineel,
+                2,
+              )}.`}
+            >
+              <span aria-hidden>⏳</span>
+              Wacht op betaling ~{fmtDM(task.voorspelling.betaaldatum)}
+            </p>
+          )}
         </div>
         <div className="shrink-0 hidden md:flex items-center gap-10 pl-4">
           <div
@@ -2051,6 +2121,86 @@ function DebtorStatsBar({ task, showSources }: { task: Task; showSources: boolea
           {dso.median_days_late}d mediaan
           <span className="text-slate-400"> · over {dso.invoice_count} facturen</span>
         </span>
+      ),
+    })
+  }
+  const v = task.voorspelling
+  if (v) {
+    const inVenster = task.priority_gedempt
+    const fmtFull = (iso: string) =>
+      new Date(iso).toLocaleDateString('nl-NL', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+      })
+    const dsoTekst =
+      v.median_dso_dagen === 0
+        ? 'precies op de vervaldatum'
+        : v.median_dso_dagen > 0
+          ? `~${v.median_dso_dagen} dagen ná de vervaldatum`
+          : `~${Math.abs(v.median_dso_dagen)} dagen vóór de vervaldatum`
+    stats.push({
+      label: 'Verwachte betaaldatum',
+      value: (
+        <StatWithTooltip
+          value={
+            <span className="tabular-nums">
+              {fmtDM(v.betaaldatum)}
+              {inVenster && (
+                <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-sky-50 text-sky-700 ring-1 ring-sky-200 font-medium normal-nums">
+                  wacht
+                </span>
+              )}
+            </span>
+          }
+          tooltip={
+            <div className="text-xs leading-relaxed">
+              <p className="font-medium text-white/90 mb-1.5">
+                Verwachte betaaldatum: {fmtFull(v.betaaldatum)}
+              </p>
+              <p className="text-white/80 mb-2">
+                We schatten in wanneer deze klant betaalt door drie dingen te
+                combineren:
+              </p>
+              <ul className="space-y-0.5 mb-2 text-white/80 list-disc pl-4">
+                <li>
+                  Oudste vervallen factuur is verlopen op{' '}
+                  <span className="tabular-nums">
+                    {fmtFull(v.oudste_vervaldatum)}
+                  </span>
+                  .
+                </li>
+                <li>Deze klant betaalt normaal {dsoTekst}.</li>
+                <li>
+                  En doet dat meestal op {v.pattern_value.toLowerCase()}.
+                </li>
+              </ul>
+              <p className="text-white/90 mb-2">
+                Eerstvolgende {v.pattern_value.toLowerCase()} op of na{' '}
+                <span className="tabular-nums">{fmtFull(v.raw_target)}</span> ={' '}
+                <span className="font-medium tabular-nums">
+                  {fmtFull(v.betaaldatum)}
+                </span>
+                .
+              </p>
+              {inVenster ? (
+                <p className="text-sky-300">
+                  We verwachten de betaling binnenkort, dus deze taak staat
+                  tijdelijk op lage priority (1,0). Komt de betaling niet
+                  binnen, dan springt hij {v.venster_na_betaaldag_werkdagen}{' '}
+                  werkdag na de betaaldatum terug naar zijn echte prioriteit.
+                </p>
+              ) : (
+                <p className="text-white/60">
+                  Valt buiten ons wacht-venster (-
+                  {v.venster_voor_betaaldag_werkdagen} t/m +
+                  {v.venster_na_betaaldag_werkdagen} werkdagen rond de
+                  betaaldatum) — de priority blijft origineel.
+                </p>
+              )}
+            </div>
+          }
+        />
       ),
     })
   }

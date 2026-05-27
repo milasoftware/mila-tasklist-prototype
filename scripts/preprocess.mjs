@@ -39,6 +39,16 @@ const BETAALGEDRAG_WINDOW_DAYS = 365
 // rekenen we het verschil mee als beïnvloedbare termijn.
 const DSO_HAALBAARHEIDSDREMPEL_DAGEN = 7
 
+// Demping-venster rond de verwachte betaaldatum. Asymmetrisch:
+//   - Voor de betaaldatum: 4 werkdagen marge — we wachten op de
+//     geplande betaling.
+//   - Na de betaaldatum: 1 werkdag marge — typische bankverwerkingstijd.
+//     Daarna mag je ervan uitgaan dat de klant niet heeft betaald op zijn
+//     pattern en moet de taak weer naar boven.
+// Binnen dit venster wordt priority geforceerd naar 1.0.
+const VENSTER_VOOR_BETAALDAG_WERKDAGEN = 4
+const VENSTER_NA_BETAALDAG_WERKDAGEN = 1
+
 // ----- helpers ---------------------------------------------------------------
 
 const today = new Date(SNAPSHOT)
@@ -270,6 +280,94 @@ function werkdagVoorReeks(isoDatum) {
   return null
 }
 
+// Werkdag-check op een ISO-datum: false bij weekend of feestdag uit
+// de FEESTDAGEN-set (TARGET2 / NL / BE).
+function isWerkdag(isoDatum) {
+  const d = new Date(isoDatum)
+  const dow = d.getUTCDay()
+  if (dow === 0 || dow === 6) return false
+  return !FEESTDAGEN.has(isoDate(d))
+}
+
+// Aantal werkdagen tussen twee ISO-datums (negatief als `tot` voor `van`
+// ligt). Telt alleen de tussenliggende dagen — twee gelijke datums
+// geven 0. Gebruikt door het demping-venster om te bepalen hoeveel
+// werkdagen tussen snapshot en verwachte betaaldatum zitten.
+function werkdagenTussen(vanIso, totIso) {
+  if (vanIso === totIso) return 0
+  const vanT = new Date(vanIso).getTime()
+  const totT = new Date(totIso).getTime()
+  const sign = totT > vanT ? 1 : -1
+  const start = sign > 0 ? vanT : totT
+  const end = sign > 0 ? totT : vanT
+  let count = 0
+  let cursor = start + oneDay
+  while (cursor <= end) {
+    if (isWerkdag(isoDate(new Date(cursor)))) count++
+    cursor += oneDay
+  }
+  return sign * count
+}
+
+// Eerstvolgende standaard betaaldag op of na `vanafIso` voor het gegeven
+// pattern. Alleen vooruit zoeken — een betaaldatum vóór `vanafIso` zou
+// betekenen dat de klant betaalde voor zijn typische DSO-moment, wat we
+// niet als signaal accepteren. Bij geen pattern: null.
+//
+// Wekelijks: (dag_index - vanafDow + 7) % 7 dagen vooruit (0 = zelfde dag).
+// Maanddag: scan dag-voor-dag (max 60 dagen vooruit) tot een dag binnen
+// de ±1 marge van center wordt gevonden. Marge is identiek aan de
+// detectie in bepaalDagUitDatums zodat een klant die in de praktijk
+// rond de 28e betaalt (27e/28e/29e) ook op die datums voorspeld wordt.
+function volgendeStandaardBetaaldag(vanafIso, pattern) {
+  if (!pattern || pattern.pattern_type === 'geen' || pattern.pattern_type == null) {
+    return null
+  }
+  const vanaf = new Date(vanafIso)
+  if (pattern.pattern_type === 'wekelijks') {
+    const targetDow = pattern.dag_index
+    const vanafDow = vanaf.getUTCDay()
+    const diff = (targetDow - vanafDow + 7) % 7
+    return isoDate(addDays(vanaf, diff))
+  }
+  if (pattern.pattern_type === 'maanddag') {
+    const center = pattern.dag_index
+    for (let i = 0; i < 62; i++) {
+      const cand = addDays(vanaf, i)
+      const day = cand.getUTCDate()
+      const dist = Math.min(Math.abs(day - center), 30 - Math.abs(day - center))
+      if (dist <= 1) return isoDate(cand)
+    }
+    return null
+  }
+  return null
+}
+
+// Voorspel de verwachte betaaldatum voor een debiteur:
+//   raw_target = vervaldatum oudste post + mediaan_DSO
+//   betaaldatum = eerstvolgende standaard betaaldag op of na raw_target
+//
+// Retour null wanneer pattern of mediaan_DSO ontbreekt (= geen
+// betrouwbare voorspelling mogelijk). Betaaldatum kan in het verleden
+// liggen wanneer de klant zijn typische DSO heeft overschreden — het
+// venster-check verderop filtert dat correct uit (snapshot ligt dan ver
+// na betaaldatum, dus buiten venster).
+function voorspelBetaaldatum({ oudsteVervaldatumIso, medianDsoDagen, pattern }) {
+  if (!oudsteVervaldatumIso) return null
+  if (medianDsoDagen === null || medianDsoDagen === undefined) return null
+  if (!pattern || pattern.pattern_type === 'geen' || pattern.pattern_type == null) {
+    return null
+  }
+  const rawTarget = isoDate(addDays(new Date(oudsteVervaldatumIso), medianDsoDagen))
+  const betaaldatum = volgendeStandaardBetaaldag(rawTarget, pattern)
+  if (!betaaldatum) return null
+  return {
+    betaaldatum,
+    raw_target: rawTarget,
+    basis: 'vervaldatum + mediaan_dso + pattern',
+  }
+}
+
 // ----- pattern-detectie -----------------------------------------------------
 
 // Berekent de beste week- en maanddag-fit over een set datums, plus
@@ -361,6 +459,7 @@ function detectPattern(paymentDates) {
     return {
       pattern_type: 'geen',
       pattern_value: null,
+      dag_index: null,
       fit_pct: 0,
       hits: 0,
       payments_observed: 0,
@@ -454,6 +553,7 @@ function detectPattern(paymentDates) {
     return {
       pattern_type: 'geen',
       pattern_value: null,
+      dag_index: null,
       fit_pct: actief ? Math.round(actief.fit * 100) : 0,
       hits: actief?.hits ?? 0,
       confidence: 'geen',
@@ -470,6 +570,7 @@ function detectPattern(paymentDates) {
   return {
     pattern_type: actief.type,
     pattern_value: actief.waarde,
+    dag_index: actief.dag_index,
     fit_pct: Math.round(actief.fit * 100),
     hits: actief.hits,
     confidence: 'hoog',
@@ -1290,8 +1391,41 @@ for (const c of taskCandidates) {
   // midden van de 1-5 schaal) zodat een onbekend potentieel een taak
   // niet kunstmatig kleiner of groter maakt.
   const potentieelVoorPriority = scores.potentieel ?? 3
-  const priority =
+  const priorityOrigineel =
     impactScore * 0.4 + urgentie * 0.3 + scores.risicoScore * 0.2 + potentieelVoorPriority * 0.1
+
+  // ---- Voorspelling verwachte betaaldatum + demping-check ---------------
+  // Vervaldatum oudste vervallen DEBET-post (creditnota's vallen weg —
+  // die kunnen geen betalingsmoment uitlokken).
+  const oudsteDebetItem = c.items
+    .filter((x) => num(x.f['Balance amount']) > 0)
+    .reduce((best, x) => (!best || x.daysOverdue > best.daysOverdue ? x : best), null)
+  const oudsteVervaldatumIso = oudsteDebetItem?.f.Duedate ?? null
+
+  // Mediaan-DSO is alleen een betrouwbaar signaal wanneer de DSO-score
+  // op werkelijke betaalhistorie is gebaseerd. Bij from_overdue=true is
+  // medianDaysLate een placeholder (=0) en mogen we hem niet gebruiken.
+  const dsoBlock = scores.betaalgedrag_breakdown.dso
+  const medianDsoDagenVoorspel = dsoBlock.from_overdue ? null : dsoBlock.median_days_late
+
+  const voorspelling = voorspelBetaaldatum({
+    oudsteVervaldatumIso,
+    medianDsoDagen: medianDsoDagenVoorspel,
+    pattern: scores.pattern,
+  })
+
+  // werkdagenTotBetaaldag: positief = snapshot ligt voor de betaaldatum
+  // (we wachten), negatief = snapshot ligt erna (betaling had al binnen
+  // moeten zijn).
+  const werkdagenTotBetaaldag = voorspelling
+    ? werkdagenTussen(SNAPSHOT, voorspelling.betaaldatum)
+    : null
+  const priorityGedempt =
+    werkdagenTotBetaaldag !== null &&
+    werkdagenTotBetaaldag <= VENSTER_VOOR_BETAALDAG_WERKDAGEN &&
+    werkdagenTotBetaaldag >= -VENSTER_NA_BETAALDAG_WERKDAGEN
+
+  const priority = priorityGedempt ? 1.0 : priorityOrigineel
 
   const factuurCount = c.items.length
   const gerelateerdeFacturen = c.items.map((x) => x.f.Invoicenumber)
@@ -1316,6 +1450,25 @@ for (const c of taskCandidates) {
     bedrag: c.totaalBedrag,
     gerelateerde_facturen: gerelateerdeFacturen,
     priority: round(priority, 2),
+    priority_origineel: round(priorityOrigineel, 2),
+    priority_gedempt: priorityGedempt,
+    voorspelling: voorspelling
+      ? {
+          betaaldatum: voorspelling.betaaldatum,
+          raw_target: voorspelling.raw_target,
+          basis: voorspelling.basis,
+          pattern_value: scores.pattern.pattern_value,
+          median_dso_dagen: medianDsoDagenVoorspel,
+          oudste_vervaldatum: oudsteVervaldatumIso,
+          werkdagen_tot_betaaldag: werkdagenTotBetaaldag,
+          binnen_venster: priorityGedempt,
+          venster_voor_betaaldag_werkdagen: VENSTER_VOOR_BETAALDAG_WERKDAGEN,
+          venster_na_betaaldag_werkdagen: VENSTER_NA_BETAALDAG_WERKDAGEN,
+          reden_demping: priorityGedempt
+            ? `Betaling verwacht op ${voorspelling.betaaldatum} (${scores.pattern.pattern_value}, mediaan ${medianDsoDagenVoorspel}d na vervaldatum) — taak wacht tot ${VENSTER_NA_BETAALDAG_WERKDAGEN} werkdag na betaaldatum voor verwerkingsmarge.`
+            : null,
+        }
+      : null,
     impact: {
       score: impactScore,
       bedrag_score: bedragScore,

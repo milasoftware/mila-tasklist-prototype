@@ -35,6 +35,17 @@ export type Task = {
   bedrag?: number
   gerelateerde_facturen?: string[]
   priority: number
+  // Originele priority-score volgens de formule
+  //   0.4*impact + 0.3*urgentie + 0.2*risico + 0.1*potentieel
+  // Wordt gebruikt voor transparantie in de UI wanneer demping actief is.
+  priority_origineel: number
+  // True wanneer de priority is geforceerd naar 1.0 omdat we de betaling
+  // binnen het demping-venster verwachten. Zie ook `voorspelling`.
+  priority_gedempt: boolean
+  // Voorspelde verwachte betaaldatum + status van het demping-venster.
+  // Null wanneer geen voorspelling mogelijk is (geen standaard betaaldag,
+  // geen betaalhistorie, of geen vervallen DEBET-post als anchor).
+  voorspelling: Voorspelling | null
   impact: {
     score: number
     bedrag_score: number
@@ -86,6 +97,29 @@ export type Task = {
     reden: string
     pattern?: PatternInfo
   }
+}
+
+export type Voorspelling = {
+  // Voorspelde betaaldatum: eerstvolgende standaard betaaldag op of na
+  // raw_target. Kan in het verleden liggen wanneer de klant zijn
+  // typische DSO heeft overschreden — dan filtert het venster-check
+  // correct uit (snapshot ligt ver na betaaldatum -> geen demping).
+  betaaldatum: string
+  // Verwacht moment zonder pattern-correctie: vervaldatum + mediaan-DSO.
+  raw_target: string
+  basis: string
+  // Pattern-waarde uit standaard betaaldag (bv "elke dinsdag" of
+  // "rond de 28e van de maand").
+  pattern_value: string
+  median_dso_dagen: number
+  oudste_vervaldatum: string
+  // Aantal werkdagen tussen snapshot en betaaldatum. Positief = snapshot
+  // ligt VOOR betaaldatum (we wachten), negatief = snapshot ligt erna.
+  werkdagen_tot_betaaldag: number
+  binnen_venster: boolean
+  venster_voor_betaaldag_werkdagen: number
+  venster_na_betaaldag_werkdagen: number
+  reden_demping: string | null
 }
 
 export type Confidence = 'hoog' | 'middel' | 'geen'
@@ -155,6 +189,11 @@ export type PatternInfo = {
   // dag op die we in de UI of herinneringsflow kunnen gebruiken.
   pattern_type: 'wekelijks' | 'maanddag' | 'geen'
   pattern_value: string | null
+  // Numerieke index voor de dominante dag:
+  //   'wekelijks' → weekday-index 0..6 (zon..za, conform Date#getUTCDay)
+  //   'maanddag'  → dag-van-de-maand 1..31 (center, ±1 marge)
+  //   'geen'      → null
+  dag_index: number | null
   fit_pct: number
   hits?: number
   payments_observed: number
