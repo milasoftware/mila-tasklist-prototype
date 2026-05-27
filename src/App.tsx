@@ -915,37 +915,66 @@ function PriorityRing({ task }: { task: Task }) {
   )
 }
 
-// Plain-language voor de Mann-Kendall trend-uitkomst. Toont alleen de
-// statistiek (Kendall τ, p-value) wanneer technische details aan staan.
+// Plain-language voor de trend-uitkomst (drift vs. baseline + momentum/slope
+// als context). Toont alleen de technische delta's wanneer "showSources"
+// aanstaat.
 function trendPlain(
   trend: {
+    score: number | null
     label: string
     confidence: 'hoog' | 'middel' | 'geen'
-    tau: number
-    p_value: number
+    drift_dagen: number | null
+    baseline_dagen: number | null
+    current_dagen: number | null
+    momentum_delta_dagen: number | null
+    slope_dagen_per_maand: number
+    story:
+      | 'hersteld na piek'
+      | 'herstellend, nog niet op niveau'
+      | 'structureel verbeterend'
+      | 'structureel verslechterend'
+      | 'structureel verhoogd'
+      | 'recent kantelpunt'
+      | null
     months_observed: number
     explanation: string
   },
   showTech: boolean,
 ): string {
-  if (trend.confidence === 'geen') {
-    return trend.months_observed < 6
-      ? `Te weinig maanden met betaalactiviteit (${trend.months_observed}) om dit te bepalen.`
-      : `Geen duidelijke richting — betaalgedrag fluctueert.`
+  if (trend.score == null || trend.drift_dagen === null) {
+    return `Te weinig maanden met betaalactiviteit (${trend.months_observed}) om dit te bepalen — minimaal 5 maanden nodig.`
   }
-  const base =
-    trend.label === 'sterk verslechterend'
-      ? `Betaalt steeds later — duidelijke verslechtering over ${trend.months_observed} maanden.`
-      : trend.label === 'verslechterend'
-        ? `Lijkt iets later te zijn gaan betalen over ${trend.months_observed} maanden.`
-        : trend.label === 'stabiel'
-          ? `Betaalt al ${trend.months_observed} maanden ongeveer hetzelfde.`
-          : trend.label === 'verbeterend'
-            ? `Lijkt iets sneller te betalen dan een paar maanden terug.`
-            : trend.label === 'sterk verbeterend'
-              ? `Betaalt duidelijk sneller dan ${trend.months_observed} maanden geleden.`
-              : trend.explanation
-  return showTech ? `${base} (Kendall τ=${trend.tau}, p=${trend.p_value})` : base
+  const base = trend.baseline_dagen ?? 0
+  const cur = trend.current_dagen ?? 0
+  // Story-label krijgt voorrang — vertelt het nuance-verhaal.
+  // Anders een tekst die expliciet "van X naar Y" benoemt, zodat de
+  // gebruiker direct ziet waarom de score zo is.
+  const storyZin: Record<NonNullable<typeof trend.story>, string> = {
+    'hersteld na piek': `Was eerder verslechterd, nu weer rond het oude niveau (~${cur}d).`,
+    'herstellend, nog niet op niveau': `Recent aan het verbeteren, maar nog niet terug bij het uitgangspunt (begon op ${base}d, nu rond ${cur}d).`,
+    'structureel verbeterend': `Betaalt structureel sneller — van ~${base}d naar ~${cur}d.`,
+    'structureel verslechterend': `Betaalt structureel later én verslechtert door — van ~${base}d naar ~${cur}d.`,
+    'structureel verhoogd': `Hoger niveau dan een paar maanden geleden — van ~${base}d naar ~${cur}d.`,
+    'recent kantelpunt': `Recent omgeslagen — eerder stabiel, nu duidelijk later.`,
+  }
+  const labelZin: Record<string, string> = {
+    stabiel: `Betaalt al ${trend.months_observed} maanden ongeveer hetzelfde (~${cur}d).`,
+    verbeterend: `Betaalt sneller dan ${trend.months_observed} maanden geleden — van ~${base}d naar ~${cur}d.`,
+    'lichte verslechtering': `Iets later dan eerder — van ~${base}d naar ~${cur}d.`,
+    'duidelijke verslechtering': `Duidelijk later dan eerder — van ~${base}d naar ~${cur}d.`,
+    'sterke verslechtering': `Veel later dan eerder — van ~${base}d naar ~${cur}d.`,
+    'acute verslechtering': `Acute verslechtering — van ~${base}d naar ~${cur}d.`,
+  }
+  const txt = trend.story ? storyZin[trend.story] : (labelZin[trend.label] ?? trend.explanation)
+  if (!showTech) return txt
+  const drift = trend.drift_dagen
+  const mom = trend.momentum_delta_dagen
+  const slope = trend.slope_dagen_per_maand
+  return (
+    `${txt} (drift ${drift >= 0 ? '+' : ''}${Math.round(drift)}d, ` +
+    `momentum ${mom === null ? '—' : (mom >= 0 ? '+' : '') + Math.round(mom) + 'd'}, ` +
+    `slope ${slope >= 0 ? '+' : ''}${slope.toFixed(1)}d/mnd)`
+  )
 }
 
 // Plain-language voor de coefficient of variation uitkomst.
@@ -1078,9 +1107,22 @@ function risicoBullets(task: Task): string[] {
     }
 
     const trend = r.betaalgedrag_breakdown.trend
-    if (trend.confidence !== 'geen' && trend.score != null) {
-      if (trend.score >= 4) bullets.push('Betaalgedrag verslechtert — betaalt steeds later.')
-      else if (trend.score <= 2) bullets.push('Betaalgedrag verbetert — betaalt steeds eerder.')
+    if (trend.score != null) {
+      if (trend.story === 'hersteld na piek') {
+        bullets.push('Betaalgedrag is hersteld — terug op het oude niveau na een eerdere piek.')
+      } else if (
+        trend.story === 'structureel verslechterend' ||
+        trend.story === 'structureel verhoogd' ||
+        trend.score >= 4
+      ) {
+        bullets.push('Betaalgedrag verslechtert — betaalt structureel later dan eerder.')
+      } else if (trend.story === 'herstellend, nog niet op niveau') {
+        bullets.push('Betaalgedrag herstelt — recent verbetering, maar nog niet terug bij uitgangspunt.')
+      } else if (trend.story === 'structureel verbeterend') {
+        bullets.push('Betaalgedrag verbetert — betaalt structureel sneller dan eerder.')
+      } else if (trend.story === 'recent kantelpunt') {
+        bullets.push('Betaalgedrag is recent omgeslagen — eerder stabiel, nu duidelijk later.')
+      }
     }
 
     const vol = r.betaalgedrag_breakdown.volatiliteit
@@ -1235,27 +1277,42 @@ function tooltipDso(
 
 function tooltipTrend(
   score: number | null,
-  tau: number,
-  pValue: number,
+  driftDagen: number | null,
+  baselineDagen: number | null,
+  currentDagen: number | null,
+  momentumDelta: number | null,
+  slope: number,
+  story:
+    | 'hersteld na piek'
+    | 'herstellend, nog niet op niveau'
+    | 'structureel verbeterend'
+    | 'structureel verslechterend'
+    | 'structureel verhoogd'
+    | 'recent kantelpunt'
+    | null,
   monthsObserved: number,
-  confidence: Confidence,
 ): React.ReactNode {
+  const fmtDelta = (d: number) => `${d >= 0 ? '+' : ''}${Math.round(d)}d`
+  const fmtSlope = (s: number) => `${s >= 0 ? '+' : ''}${s.toFixed(1)}d/mnd`
   return (
     <ScoreTooltip
       title="Gaat het beter of slechter"
-      description="Mann-Kendall trend-test op de maandelijkse DSO. Detecteert of de klant systematisch later (of juist eerder) is gaan betalen. Positieve τ = stijgende DSO = verslechterend."
+      description="Drift = huidige stand (mediaan laatste 2 mnd) minus uitgangspunt (mediaan eerste 3 mnd) op de maandelijkse mediaan-DSO. Vangt structurele verslechtering: een klant die van 6d naar 18d is gegroeid telt zwaar, ook als de laatste paar maanden lokaal stabiel zijn. Momentum (laatste 3 vs voorgaande 3) en Theil-Sen slope dienen als context voor het story-label. Asymmetrisch — alleen verslechtering verhoogt het risico."
       thresholds={[
-        { score: 1, label: 'τ ≤ −0,4 (sterk verbeterend)' },
-        { score: 2, label: '−0,4 < τ ≤ −0,2 (verbeterend)' },
-        { score: 3, label: '−0,2 < τ < 0,2 (stabiel)' },
-        { score: 4, label: '0,2 ≤ τ < 0,4 (verslechterend)' },
-        { score: 5, label: 'τ ≥ 0,4 (sterk verslechterend)' },
+        { score: 1, label: 'drift < +3d (stabiel of verbeterend)' },
+        { score: 2, label: '+3 t/m +6d (lichte verslechtering)' },
+        { score: 3, label: '+7 t/m +9d (duidelijke verslechtering)' },
+        { score: 4, label: '+10 t/m +19d (sterke verslechtering)' },
+        { score: 5, label: '≥ +20d (acute verslechtering)' },
       ]}
       activeScore={score}
       current={
-        confidence === 'geen'
-          ? `Te weinig data (${monthsObserved} maanden of geen significantie, p=${pValue}) → geen score`
-          : `τ=${tau}, p=${pValue} over ${monthsObserved} maanden → score ${score}`
+        driftDagen === null
+          ? `Te weinig data (${monthsObserved} maanden, minimaal 5 nodig) → geen score`
+          : `van ${baselineDagen}d → ${currentDagen}d (drift ${fmtDelta(driftDagen)}), ` +
+            `momentum ${momentumDelta === null ? '—' : fmtDelta(momentumDelta)}, ` +
+            `slope ${fmtSlope(slope)} over ${monthsObserved} mnd → score ${score}` +
+            (story ? ` (${story})` : '')
       }
     />
   )
@@ -1779,8 +1836,20 @@ function tooltipStandaardBetaaldag(p: PatternInfo): React.ReactNode {
         {p.min_hits !== undefined && p.min_fit_pct !== undefined && (
           <div className="flex justify-between gap-3">
             <span className="text-white/50">Beslisregel</span>
-            <span>
-              ≥{p.min_hits} hits + ≥{p.min_fit_pct}% (of {p.perfect_min_hits ?? 3}× 100%)
+            <span className="text-right">
+              {p.high_volume_hits !== undefined && p.high_volume_fit_pct !== undefined ? (
+                <>
+                  ≥{p.high_volume_hits} hits + ≥{p.high_volume_fit_pct}%
+                  <br />
+                  óf ≥{p.min_hits} hits + ≥{p.min_fit_pct}%
+                  <br />
+                  óf {p.perfect_min_hits ?? 3}× 100%
+                </>
+              ) : (
+                <>
+                  ≥{p.min_hits} hits + ≥{p.min_fit_pct}% (of {p.perfect_min_hits ?? 3}× 100%)
+                </>
+              )}
             </span>
           </div>
         )}
@@ -2402,10 +2471,13 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
                 confidence={task.risico.betaalgedrag_breakdown.trend.confidence}
                 tooltip={tooltipTrend(
                   task.risico.betaalgedrag_breakdown.trend.score,
-                  task.risico.betaalgedrag_breakdown.trend.tau,
-                  task.risico.betaalgedrag_breakdown.trend.p_value,
+                  task.risico.betaalgedrag_breakdown.trend.drift_dagen,
+                  task.risico.betaalgedrag_breakdown.trend.baseline_dagen,
+                  task.risico.betaalgedrag_breakdown.trend.current_dagen,
+                  task.risico.betaalgedrag_breakdown.trend.momentum_delta_dagen,
+                  task.risico.betaalgedrag_breakdown.trend.slope_dagen_per_maand,
+                  task.risico.betaalgedrag_breakdown.trend.story,
                   task.risico.betaalgedrag_breakdown.trend.months_observed,
-                  task.risico.betaalgedrag_breakdown.trend.confidence,
                 )}
                 caption={trendPlain(task.risico.betaalgedrag_breakdown.trend, showSources)}
                 viz={

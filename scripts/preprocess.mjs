@@ -55,36 +55,60 @@ const formatEUR = (n) =>
 
 // ----- statistische helpers (fase 1 AI-componenten) --------------------------
 
-// Abramowitz & Stegun-benadering van de fout-functie, voor normaal-CDF
-function erf(x) {
-  const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741
-  const a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911
-  const sign = x < 0 ? -1 : 1
-  x = Math.abs(x)
-  const t = 1 / (1 + p * x)
-  const y = 1 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-x * x)
-  return sign * y
-}
-const normalCdf = (z) => 0.5 * (1 + erf(z / Math.SQRT2))
-
-// Mann-Kendall trend-test (non-parametrisch). Detecteert of een monotone
-// trend bestaat. Geeft tau (-1..1, sterkte+richting) en p-value (significantie).
-// Voor onze use case: positief tau betekent stijgende DSO = verslechterend
-// betaalgedrag.
-function mannKendall(values) {
+// Theil-Sen slope estimator — mediaan van alle pair-wise slopes tussen
+// observaties. Robust regression: één outlier-maand verandert de uitkomst
+// niet wezenlijk. Geeft een slope-getal in eenheid-per-stap (hier: dagen
+// per maand). Voor onze use case: positieve slope = DSO loopt structureel
+// op = betaalgedrag verslechtert geleidelijk over de hele meetperiode.
+function theilSenSlope(values) {
   const n = values.length
-  if (n < 4) return { tau: 0, pValue: 1, n }
-  let S = 0
+  if (n < 2) return 0
+  const slopes = []
   for (let i = 0; i < n - 1; i++) {
     for (let j = i + 1; j < n; j++) {
-      S += Math.sign(values[j] - values[i])
+      slopes.push((values[j] - values[i]) / (j - i))
     }
   }
-  const variance = (n * (n - 1) * (2 * n + 5)) / 18
-  const z = S === 0 ? 0 : (S - Math.sign(S)) / Math.sqrt(variance)
-  const pValue = 2 * (1 - normalCdf(Math.abs(z)))
-  const tau = S / ((n * (n - 1)) / 2)
-  return { tau, pValue, n }
+  slopes.sort((a, b) => a - b)
+  const mid = Math.floor(slopes.length / 2)
+  return slopes.length % 2 === 0
+    ? (slopes[mid - 1] + slopes[mid]) / 2
+    : slopes[mid]
+}
+
+// Mediaan-helper voor de trend-vensters hieronder.
+function _medOf(arr) {
+  const s = [...arr].sort((a, b) => a - b)
+  const mid = Math.floor(s.length / 2)
+  return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid]
+}
+
+// Drift vs. baseline: hoe ver staat het huidige betaalniveau van het
+// uitgangspunt aan het begin van de meetperiode? Dit is het primaire
+// signaal voor de score — "van 6d naar 18d" is structureel slecht, ook
+// als het korte-termijn momentum (laatste 3 vs voorgaande 3) toevallig
+// stabiel of dalend is. Korte current-window (2 mnd) zorgt dat recent
+// herstel snel zichtbaar wordt: een klant die terug is bij het
+// uitgangspunt krijgt geen score-penalty meer.
+function driftVsBaseline(values) {
+  const n = values.length
+  if (n < 5) return null
+  const baseline = _medOf(values.slice(0, 3))
+  const current = _medOf(values.slice(-2))
+  return current - baseline
+}
+
+// Momentum: hoe verschilt het recente gedrag (laatste 3 mnd) van het
+// gedrag daarvoor (voorgaande 3 mnd)? Secundair signaal — alleen
+// gebruikt voor het story-label (herstellend / kantelpunt / structureel).
+function momentumDelta(values) {
+  const n = values.length
+  if (n < 5) return null
+  const laatste3 = values.slice(-3)
+  const voorgaande3 = values.slice(-6, -3)
+  if (voorgaande3.length >= 2) return _medOf(laatste3) - _medOf(voorgaande3)
+  const half = Math.floor(n / 2)
+  return _medOf(values.slice(-half)) - _medOf(values.slice(0, half))
 }
 
 // Coefficient of variation — eenvoudige maat voor relatieve spreiding.
@@ -97,16 +121,19 @@ function coefficientOfVariation(values) {
   return Math.sqrt(variance) / Math.abs(mean)
 }
 
-// Standaard betaaldag pattern recognition v3.
+// Standaard betaaldag pattern recognition v4.
 //
 // Bron: fysieke betalingen (records met Invoicetype/Documenttype in
 //   {Betaling, Terugbetaling, leeg}). Géén interne reconciliaties uit
 //   Factuur.payments — dat zijn boekhoudacties (creditnota's wegstrepen
 //   op kasdagen) en geen klantgedrag.
 // Venster: laatste 12 maanden vóór snapshot.
-// Beslisregel: toon één dag als
-//   (a) ≥4 betalingen op de dominante dag EN ≥50% van alle betalingen, OF
-//   (b) ≥3 betalingen die ALLE op dezelfde dag vielen (100% fit).
+// Beslisregel (gestaffeld op aantal hits): toon één dag als
+//   (a-high)  ≥10 betalingen op de dominante dag EN ≥40% fit
+//             → bij veel data is 40% statistisch significant
+//   (a-norm)  ≥4 betalingen op de dominante dag EN ≥50% fit
+//             → bij weinig data eisen we stevigere dominantie
+//   (b)       ≥3 betalingen die ALLE op dezelfde dag vielen (100% fit)
 //   Anders: "geen standaard betaaldag".
 // Twee patroon-types worden geprobeerd; winnaar = hoogste fit:
 //   - vaste weekdag (mode op dag-van-de-week)
@@ -128,6 +155,8 @@ const STANDAARD_BETAALDAG_VENSTER_MAANDEN = 12
 const STANDAARD_BETAALDAG_NIEUW_VENSTER_DAGEN = 90 // = 3 mnd
 const STANDAARD_BETAALDAG_MIN_HITS = 4
 const STANDAARD_BETAALDAG_MIN_FIT = 0.5
+const STANDAARD_BETAALDAG_HIGH_VOLUME_HITS = 10
+const STANDAARD_BETAALDAG_HIGH_VOLUME_FIT = 0.4
 const STANDAARD_BETAALDAG_PERFECT_MIN_HITS = 3 // bij 100% fit mag n lager
 
 // ----- feestdag-helpers -----------------------------------------------------
@@ -295,10 +324,15 @@ function bepaalDagUitDatums(uniqueDates) {
   }
   const best = weekFit >= monthFit ? weekCand : monthCand
 
-  // Beslisregel
-  const rule_a = best.hits >= STANDAARD_BETAALDAG_MIN_HITS && best.fit >= STANDAARD_BETAALDAG_MIN_FIT
+  // Beslisregel (gestaffeld: bij veel data is een lagere fit-drempel
+  // statistisch voldoende, bij weinig data eisen we stevigere dominantie).
+  const rule_a_high =
+    best.hits >= STANDAARD_BETAALDAG_HIGH_VOLUME_HITS &&
+    best.fit >= STANDAARD_BETAALDAG_HIGH_VOLUME_FIT
+  const rule_a_norm =
+    best.hits >= STANDAARD_BETAALDAG_MIN_HITS && best.fit >= STANDAARD_BETAALDAG_MIN_FIT
   const rule_b = best.hits >= STANDAARD_BETAALDAG_PERFECT_MIN_HITS && best.fit === 1
-  if (!rule_a && !rule_b) return { ...best, n, passes: false }
+  if (!rule_a_high && !rule_a_norm && !rule_b) return { ...best, n, passes: false }
   return { ...best, n, passes: true }
 }
 
@@ -309,6 +343,8 @@ function detectPattern(paymentDates) {
     nieuw_venster_dagen: STANDAARD_BETAALDAG_NIEUW_VENSTER_DAGEN,
     min_hits: STANDAARD_BETAALDAG_MIN_HITS,
     min_fit_pct: Math.round(STANDAARD_BETAALDAG_MIN_FIT * 100),
+    high_volume_hits: STANDAARD_BETAALDAG_HIGH_VOLUME_HITS,
+    high_volume_fit_pct: Math.round(STANDAARD_BETAALDAG_HIGH_VOLUME_FIT * 100),
     perfect_min_hits: STANDAARD_BETAALDAG_PERFECT_MIN_HITS,
     feestdag_correctie: true,
   }
@@ -841,41 +877,97 @@ function debiteurScores(debNr) {
   else if (medianDaysLate <= 45) dsoScore = 4
   else dsoScore = 5
 
-  // ---- AI-sub-parameter: trend (Mann-Kendall over maandelijkse DSO) -------
+  // ---- AI-sub-parameter: trend (drift vs. baseline op maandelijkse DSO)
+  //
+  // Voorheen Mann-Kendall (rangtest op alle maanden): miste magnitude
+  // én recent herstel, ~87% op "onbekend". Eerste vervanging was
+  // momentum (laatste 3 vs voorgaande 3 mnd), maar dat miste de
+  // structurele drift: een klant die van 6d naar 18d gegroeid is wordt
+  // door momentum als "stabiel" geclassificeerd zodra de laatste paar
+  // maanden lokaal vergelijkbaar zijn. Vanuit risico-oogpunt is het
+  // niveau-verschil t.o.v. het uitgangspunt wat telt.
+  //
+  // Daarom nu drie signalen op de maandelijkse mediaan-DSO-serie:
+  //   - drift_dagen = mediaan(laatste 2 mnd) − mediaan(eerste 3 mnd)
+  //     → PRIMAIR signaal voor de score. "Hoe ver staat de klant nu van
+  //     waar hij begon?" Korte current-window (2 mnd) erkent recent
+  //     herstel snel; lange baseline (3 mnd) blijft stabiel uitgangspunt.
+  //   - momentum_delta = mediaan(laatste 3) − mediaan(voorgaande 3)
+  //     → CONTEXT voor story-label (herstellend / kantelpunt).
+  //   - slope = Theil-Sen over hele serie
+  //     → CONTEXT voor story-label (structurele drift over alle mnd).
+  //
+  // Score is asymmetrisch: alleen positieve drift verhoogt de score.
+  // Stabiel of verbeterend = score 1. Geen score bij < 5 maanden data.
   const monthly = monthlyDsoSeries(paid)
-  const mk = mannKendall(monthly.values)
-  let trendConfidence = 'geen'
-  if (mk.n >= 9 && mk.pValue < 0.05) trendConfidence = 'hoog'
-  else if (mk.n >= 6 && mk.pValue < 0.15) trendConfidence = 'middel'
+  const nMaanden = monthly.values.length
+  const driftDagen = driftVsBaseline(monthly.values)
+  const momDelta = momentumDelta(monthly.values)
+  const slopePerMaand = nMaanden >= 3 ? theilSenSlope(monthly.values) : 0
 
-  let trendScore = null,
-    trendLabel = 'onbekend',
-    trendExplanation = ''
-  if (trendConfidence === 'geen') {
-    trendExplanation =
-      mk.n < 6
-        ? `Te weinig maanden met betaalactiviteit (${mk.n}) voor trendanalyse.`
-        : `Geen significante trend gevonden (p=${round(mk.pValue, 2)} over ${mk.n} maanden).`
-    trendLabel = mk.n < 6 ? 'onbekend' : 'stabiel'
+  let trendScore = null
+  let trendLabel = 'onbekend'
+  let trendConfidence = 'geen'
+  let trendStory = null
+  let trendExplanation = ''
+
+  if (driftDagen === null) {
+    trendExplanation = `Te weinig maanden met betaalactiviteit (${nMaanden}) voor trendanalyse — minimaal 5 maanden nodig.`
   } else {
-    // Positief tau = stijgende DSO = verslechterend betaalgedrag
-    if (mk.tau >= 0.4) {
-      trendScore = 5
-      trendLabel = 'sterk verslechterend'
-    } else if (mk.tau >= 0.2) {
-      trendScore = 4
-      trendLabel = 'verslechterend'
-    } else if (mk.tau > -0.2) {
-      trendScore = 3
-      trendLabel = 'stabiel'
-    } else if (mk.tau > -0.4) {
-      trendScore = 2
-      trendLabel = 'verbeterend'
-    } else {
+    // Asymmetrische schaal op drift (dagen).
+    if (driftDagen < 3) {
       trendScore = 1
-      trendLabel = 'sterk verbeterend'
+      trendLabel = driftDagen <= -3 ? 'verbeterend' : 'stabiel'
+    } else if (driftDagen < 7) {
+      trendScore = 2
+      trendLabel = 'lichte verslechtering'
+    } else if (driftDagen < 10) {
+      trendScore = 3
+      trendLabel = 'duidelijke verslechtering'
+    } else if (driftDagen < 20) {
+      trendScore = 4
+      trendLabel = 'sterke verslechtering'
+    } else {
+      trendScore = 5
+      trendLabel = 'acute verslechtering'
     }
-    trendExplanation = `${trendLabel} (Kendall τ=${round(mk.tau, 2)}, p=${round(mk.pValue, 2)} over ${mk.n} maanden).`
+
+    // Confidence: alleen op n maanden — bij 9+ mnd robuust, 5-8 middel.
+    trendConfidence = nMaanden >= 9 ? 'hoog' : 'middel'
+
+    // Story-label: combineert drift + momentum + slope om de nuance te
+    // benoemen. Volgorde matters — eerst de meest specifieke gevallen.
+    if (driftDagen >= 7 && momDelta !== null && momDelta <= -3) {
+      // Niveau is structureel verhoogd, maar de klant beweegt nu de goede
+      // kant op. Belangrijk voor de UI: niet alleen "structureel slecht"
+      // melden, maar ook erkennen dat er recent beweging is.
+      trendStory = 'herstellend, nog niet op niveau'
+    } else if (driftDagen < 3 && momDelta !== null && momDelta <= -3) {
+      // Klant is terug bij (of onder) het uitgangspunt na een eerdere
+      // piek — drift klein, momentum sterk negatief.
+      trendStory = 'hersteld na piek'
+    } else if (driftDagen >= 7 && momDelta !== null && momDelta >= 3) {
+      // Zowel structureel verhoogd als nu nog verder dalend — slechtste
+      // van twee werelden.
+      trendStory = 'structureel verslechterend'
+    } else if (driftDagen < 3 && slopePerMaand <= -1) {
+      trendStory = 'structureel verbeterend'
+    } else if (driftDagen < 7 && momDelta !== null && momDelta >= 7) {
+      // Drift nog beperkt, maar laatste 3 maanden duidelijk slechter
+      // dan voorgaande 3 → recent kantelpunt, dat moet vroeg gesignaleerd.
+      trendStory = 'recent kantelpunt'
+    } else if (driftDagen >= 7) {
+      // Default voor verhoogde drift zonder duidelijke richting.
+      trendStory = 'structureel verhoogd'
+    }
+
+    const driftStr = `${driftDagen >= 0 ? '+' : ''}${round(driftDagen, 1)}d`
+    const momStr =
+      momDelta === null ? '—' : `${momDelta >= 0 ? '+' : ''}${round(momDelta, 1)}d`
+    trendExplanation =
+      `${trendLabel} — drift ${driftStr} t.o.v. uitgangspunt ` +
+      `(momentum ${momStr}, slope ${slopePerMaand >= 0 ? '+' : ''}${round(slopePerMaand, 1)}d/mnd over ${nMaanden} mnd)` +
+      (trendStory ? ` — ${trendStory}` : '')
   }
 
   // ---- AI-sub-parameter: volatiliteit (CV op betaalintervallen) -----------
@@ -1064,9 +1156,15 @@ function debiteurScores(debNr) {
         score: trendScore,
         label: trendLabel,
         confidence: trendConfidence,
-        tau: round(mk.tau, 2),
-        p_value: round(mk.pValue, 3),
-        months_observed: mk.n,
+        drift_dagen: driftDagen === null ? null : round(driftDagen, 1),
+        baseline_dagen:
+          driftDagen === null ? null : Math.round(_medOf(monthly.values.slice(0, 3))),
+        current_dagen:
+          driftDagen === null ? null : Math.round(_medOf(monthly.values.slice(-2))),
+        momentum_delta_dagen: momDelta === null ? null : round(momDelta, 1),
+        slope_dagen_per_maand: round(slopePerMaand, 2),
+        story: trendStory,
+        months_observed: nMaanden,
         explanation: trendExplanation,
         series: monthly.months.map((m, i) => ({
           month: m,

@@ -102,8 +102,31 @@ export type BetaalgedragBreakdown = {
     score: number | null
     label: string
     confidence: Confidence
-    tau: number
-    p_value: number
+    // Drift: mediaan(laatste 2 mnd) − mediaan(eerste 3 mnd) in dagen.
+    // Primair signaal voor de score — "hoe ver zit de klant nu van zijn
+    // uitgangspunt?". null bij < 5 maanden data.
+    drift_dagen: number | null
+    // Het uitgangspunt en de huidige stand zelf (in dagen DSO) — voor de
+    // UI om "van X naar Y" te kunnen tonen.
+    baseline_dagen: number | null
+    current_dagen: number | null
+    // Momentum: mediaan(laatste 3 mnd) − mediaan(voorgaande 3 mnd) in dagen.
+    // Secundair signaal — gebruikt voor story-label (herstellend / kantelpunt).
+    momentum_delta_dagen: number | null
+    // Theil-Sen slope over de hele serie, in dagen-DSO per maand.
+    // Robuuste regressie (mediaan van pair-wise slopes) — context voor
+    // het story-label. Positief = structureel oplopend.
+    slope_dagen_per_maand: number
+    // Story-label dat drift + momentum + slope combineert. null = geen
+    // bijzonder verhaal te vertellen (gewone stabiele of geleidelijke trend).
+    story:
+      | 'hersteld na piek'
+      | 'herstellend, nog niet op niveau'
+      | 'structureel verbeterend'
+      | 'structureel verslechterend'
+      | 'structureel verhoogd'
+      | 'recent kantelpunt'
+      | null
     months_observed: number
     explanation: string
     // Maanden die meetellen voor de trendlijn. Per maand de mediaan
@@ -145,6 +168,10 @@ export type PatternInfo = {
   nieuw_venster_dagen?: number
   min_hits?: number
   min_fit_pct?: number
+  // Gestaffelde drempel: bij ≥ high_volume_hits hits op de dominante dag
+  // is een lagere fit (high_volume_fit_pct) statistisch al voldoende.
+  high_volume_hits?: number
+  high_volume_fit_pct?: number
   perfect_min_hits?: number
   feestdag_correctie?: boolean
   // Aantal betalingen waarop selectieve feestdag/weekend-correctie
