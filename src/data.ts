@@ -42,6 +42,17 @@ export type Task = {
   // True wanneer de priority is geforceerd naar 1.0 omdat we de betaling
   // binnen het demping-venster verwachten. Zie ook `voorspelling`.
   priority_gedempt: boolean
+  // Werkelijk gebruikte gewichten voor `priority_origineel`. Default zijn
+  // dit 0.4 / 0.3 / 0.2 / 0.1. Wanneer `potentieel.score === null` en de
+  // berekening genormaliseerd is, wordt potentieel = 0 en worden de andere
+  // gewichten naar rato opgehoogd (0.4444 / 0.3333 / 0.2222 / 0).
+  priority_weights: {
+    impact: number
+    urgentie: number
+    risico: number
+    potentieel: number
+    genormaliseerd: boolean
+  }
   // Voorspelde verwachte betaaldatum + status van het demping-venster.
   // Null wanneer geen voorspelling mogelijk is (geen standaard betaaldag,
   // geen betaalhistorie, of geen vervallen DEBET-post als anchor).
@@ -111,7 +122,19 @@ export type Voorspelling = {
   // Pattern-waarde uit standaard betaaldag (bv "elke dinsdag" of
   // "rond de 28e van de maand").
   pattern_value: string
+  // Mediaan-DSO die voor deze voorspelling is gebruikt (90-dagen venster
+  // of fallback naar 12 mnd). Zie ook `median_dso_bron`.
   median_dso_dagen: number
+  // Ongewogen baseline-mediaan over 12 mnd (zelfde waarde als
+  // betaalgedrag_breakdown.dso.median_days_late). Bij verschil met
+  // `median_dso_dagen` toont de UI beide cijfers ter onderbouwing.
+  median_dso_baseline_dagen: number
+  // Bron-label voor `median_dso_dagen`: '90d' wanneer er voldoende
+  // recente facturen waren, '12m-fallback' wanneer we terug zijn gevallen
+  // op de baseline. Cijferdeel sluit aan bij DSO_VOORSPEL_VENSTER_DAGEN.
+  median_dso_bron: string
+  // Aantal facturen waarop `median_dso_dagen` is berekend.
+  median_dso_invoice_count: number
   oudste_vervaldatum: string
   // Aantal werkdagen tussen snapshot en betaaldatum. Positief = snapshot
   // ligt VOOR betaaldatum (we wachten), negatief = snapshot ligt erna.
@@ -130,6 +153,15 @@ export type BetaalgedragBreakdown = {
     median_days_late: number
     invoice_count: number
     from_overdue?: boolean
+    // Mediaan over een kort venster (90 dagen) — gebruikt voor de
+    // verwachte-betaaldatum-voorspelling. null als er ook geen 12-mnd
+    // historie is.
+    median_days_late_voorspel?: number | null
+    voorspel_invoice_count?: number
+    // True wanneer we voor de voorspelling zijn teruggevallen op de
+    // 12-mnd mediaan omdat er te weinig recente facturen waren.
+    voorspel_fallback_naar_12m?: boolean
+    voorspel_venster_dagen?: number
     oudste_dagen_vervallen?: number
   }
   trend: {

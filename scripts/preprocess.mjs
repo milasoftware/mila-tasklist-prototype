@@ -39,14 +39,25 @@ const BETAALGEDRAG_WINDOW_DAYS = 365
 // rekenen we het verschil mee als beïnvloedbare termijn.
 const DSO_HAALBAARHEIDSDREMPEL_DAGEN = 7
 
+// Voor de verwachte-betaaldatum-voorspelling gebruiken we een korter
+// venster dan de 12-mnd DSO-baseline: 90 dagen, met een ondergrens van
+// 3 facturen voor betrouwbaarheid. Zo reageert de voorspelling sneller
+// op recent veranderend betaalgedrag (klant die de laatste maanden
+// sneller / langzamer is geworden) zonder dat de baseline-metric in de
+// detail-view ('Hoeveel dagen meestal te laat') ook gaat schommelen.
+// Te weinig recente data → fallback naar de 12-mnd mediaan.
+const DSO_VOORSPEL_VENSTER_DAGEN = 90
+const DSO_VOORSPEL_MIN_FACTUREN = 3
+
 // Demping-venster rond de verwachte betaaldatum. Asymmetrisch:
-//   - Voor de betaaldatum: 4 werkdagen marge — we wachten op de
-//     geplande betaling.
+//   - Voor de betaaldatum: 3 werkdagen marge — we wachten op de
+//     geplande betaling. Bewust krap gehouden zodat een feestdag in
+//     het venster niet ineens een week aan ruimte oplevert.
 //   - Na de betaaldatum: 1 werkdag marge — typische bankverwerkingstijd.
 //     Daarna mag je ervan uitgaan dat de klant niet heeft betaald op zijn
 //     pattern en moet de taak weer naar boven.
 // Binnen dit venster wordt priority geforceerd naar 1.0.
-const VENSTER_VOOR_BETAALDAG_WERKDAGEN = 4
+const VENSTER_VOOR_BETAALDAG_WERKDAGEN = 3
 const VENSTER_NA_BETAALDAG_WERKDAGEN = 1
 
 // ----- helpers ---------------------------------------------------------------
@@ -944,22 +955,38 @@ function debiteurScores(debNr) {
   )
   const recentWindowStartMs =
     new Date(SNAPSHOT).getTime() - BETAALGEDRAG_WINDOW_DAYS * 86400000
+  const voorspelWindowStartMs =
+    new Date(SNAPSHOT).getTime() - DSO_VOORSPEL_VENSTER_DAGEN * 86400000
   const dsoVals = []
+  const dsoValsVoorspel = []
   for (const f of paid) {
     const lastPay = f.payments.reduce((max, p) => (p.date > max ? p.date : max), '')
     if (!lastPay) continue
-    if (new Date(lastPay).getTime() < recentWindowStartMs) continue
-    dsoVals.push(daysBetween(lastPay, f.Duedate))
+    const lpMs = new Date(lastPay).getTime()
+    if (lpMs < recentWindowStartMs) continue
+    const dso = daysBetween(lastPay, f.Duedate)
+    dsoVals.push(dso)
+    if (lpMs >= voorspelWindowStartMs) dsoValsVoorspel.push(dso)
   }
   // Mediaan i.p.v. gemiddelde: robuuster tegen uitschieters (één factuur die
   // 500 dagen later betaald werd trekt het gemiddelde scheef).
-  let medianDaysLate = 0
-  if (dsoVals.length) {
-    const sortedVals = [...dsoVals].sort((a, b) => a - b)
-    const mid = Math.floor(sortedVals.length / 2)
-    medianDaysLate =
-      sortedVals.length % 2 === 0 ? (sortedVals[mid - 1] + sortedVals[mid]) / 2 : sortedVals[mid]
+  const medOf = (vals) => {
+    if (!vals.length) return 0
+    const s = [...vals].sort((a, b) => a - b)
+    const m = Math.floor(s.length / 2)
+    return s.length % 2 === 0 ? (s[m - 1] + s[m]) / 2 : s[m]
   }
+  const medianDaysLate = medOf(dsoVals)
+  // Voorspelling-mediaan: 90-dagen venster wanneer er ≥ N facturen zijn.
+  // Anders fall back op de 12-mnd mediaan zodat we toch een schatting
+  // hebben. Null wanneer überhaupt geen betaalhistorie aanwezig is —
+  // dat geval valt later samen met de from_overdue-check.
+  const heeftRecenteData = dsoValsVoorspel.length >= DSO_VOORSPEL_MIN_FACTUREN
+  const medianDaysLateVoorspel = heeftRecenteData
+    ? medOf(dsoValsVoorspel)
+    : dsoVals.length
+      ? medianDaysLate
+      : null
 
   // DSO-score met edge-case-regel:
   // Wanneer er geen betaalhistorie is in het 12-maands venster (dsoVals leeg)
@@ -1252,6 +1279,14 @@ function debiteurScores(debNr) {
         invoice_count: dsoVals.length,
         from_overdue: dsoFromOverdue,
         oudste_dagen_vervallen: dsoFromOverdue ? oldestDays : undefined,
+        // Voorspelling-mediaan: zelfde berekening maar op 90-dagen-venster
+        // (of fallback naar 12 mnd bij te weinig recente data). Wordt
+        // gebruikt door de verwachte-betaaldatum-voorspelling.
+        median_days_late_voorspel:
+          medianDaysLateVoorspel === null ? null : Math.round(medianDaysLateVoorspel),
+        voorspel_invoice_count: dsoValsVoorspel.length,
+        voorspel_fallback_naar_12m: !heeftRecenteData && dsoVals.length > 0,
+        voorspel_venster_dagen: DSO_VOORSPEL_VENSTER_DAGEN,
       },
       trend: {
         score: trendScore,
@@ -1387,12 +1422,28 @@ for (const c of taskCandidates) {
   const urgentie = urgentieScore(c.oudste)
 
   // Potentieel kan null zijn (= geen betaalhistorie, score onbekend).
-  // Voor de priority-berekening vallen we dan terug op 3 (neutraal,
-  // midden van de 1-5 schaal) zodat een onbekend potentieel een taak
-  // niet kunstmatig kleiner of groter maakt.
-  const potentieelVoorPriority = scores.potentieel ?? 3
+  // We normaliseren dan: de 10% van potentieel valt weg en de overige
+  // gewichten (40% / 30% / 20% = 90%) worden naar rato opgehoogd zodat
+  // ze samen weer 100% zijn (44,4% / 33,3% / 22,2%). Zo verzinnen we
+  // geen waarde voor iets wat we niet weten en tellen alleen de
+  // bekende signalen evenredig zwaarder mee.
+  const potentieelBekend = scores.potentieel !== null
+  const wImpact = potentieelBekend ? 0.4 : 0.4 / 0.9
+  const wUrgentie = potentieelBekend ? 0.3 : 0.3 / 0.9
+  const wRisico = potentieelBekend ? 0.2 : 0.2 / 0.9
+  const wPotentieel = potentieelBekend ? 0.1 : 0
   const priorityOrigineel =
-    impactScore * 0.4 + urgentie * 0.3 + scores.risicoScore * 0.2 + potentieelVoorPriority * 0.1
+    impactScore * wImpact +
+    urgentie * wUrgentie +
+    scores.risicoScore * wRisico +
+    (scores.potentieel ?? 0) * wPotentieel
+  const priorityWeights = {
+    impact: round(wImpact, 4),
+    urgentie: round(wUrgentie, 4),
+    risico: round(wRisico, 4),
+    potentieel: round(wPotentieel, 4),
+    genormaliseerd: !potentieelBekend,
+  }
 
   // ---- Voorspelling verwachte betaaldatum + demping-check ---------------
   // Vervaldatum oudste vervallen DEBET-post (creditnota's vallen weg —
@@ -1402,11 +1453,15 @@ for (const c of taskCandidates) {
     .reduce((best, x) => (!best || x.daysOverdue > best.daysOverdue ? x : best), null)
   const oudsteVervaldatumIso = oudsteDebetItem?.f.Duedate ?? null
 
-  // Mediaan-DSO is alleen een betrouwbaar signaal wanneer de DSO-score
-  // op werkelijke betaalhistorie is gebaseerd. Bij from_overdue=true is
-  // medianDaysLate een placeholder (=0) en mogen we hem niet gebruiken.
+  // Voor de voorspelling gebruiken we de mediaan over een korter venster
+  // (90 dagen) zodat recent veranderend betaalgedrag direct wordt
+  // meegenomen — zonder de baseline-metric in de detail-view te raken.
+  // Bij from_overdue=true (geen paid facturen) is alles null en valt de
+  // voorspelling-helper terug op null.
   const dsoBlock = scores.betaalgedrag_breakdown.dso
-  const medianDsoDagenVoorspel = dsoBlock.from_overdue ? null : dsoBlock.median_days_late
+  const medianDsoDagenVoorspel = dsoBlock.from_overdue
+    ? null
+    : dsoBlock.median_days_late_voorspel
 
   const voorspelling = voorspelBetaaldatum({
     oudsteVervaldatumIso,
@@ -1452,6 +1507,7 @@ for (const c of taskCandidates) {
     priority: round(priority, 2),
     priority_origineel: round(priorityOrigineel, 2),
     priority_gedempt: priorityGedempt,
+    priority_weights: priorityWeights,
     voorspelling: voorspelling
       ? {
           betaaldatum: voorspelling.betaaldatum,
@@ -1459,6 +1515,13 @@ for (const c of taskCandidates) {
           basis: voorspelling.basis,
           pattern_value: scores.pattern.pattern_value,
           median_dso_dagen: medianDsoDagenVoorspel,
+          median_dso_baseline_dagen: dsoBlock.median_days_late,
+          median_dso_bron: dsoBlock.voorspel_fallback_naar_12m
+            ? '12m-fallback'
+            : `${DSO_VOORSPEL_VENSTER_DAGEN}d`,
+          median_dso_invoice_count: dsoBlock.voorspel_fallback_naar_12m
+            ? dsoBlock.invoice_count
+            : dsoBlock.voorspel_invoice_count,
           oudste_vervaldatum: oudsteVervaldatumIso,
           werkdagen_tot_betaaldag: werkdagenTotBetaaldag,
           binnen_venster: priorityGedempt,

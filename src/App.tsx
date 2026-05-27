@@ -44,8 +44,6 @@ const SNAPSHOT = new Date(meta.snapshot_datum)
 const daysOverdue = (vervaldatum: string) =>
   Math.floor((SNAPSHOT.getTime() - new Date(vervaldatum).getTime()) / 86400000)
 
-const WEIGHTS = { impact: 0.4, urgentie: 0.3, risico: 0.2, potentieel: 0.1 }
-
 const fmtEUR = (n: number) =>
   n.toLocaleString('nl-NL', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
 const fmtNL = (n: number, dec = 1) =>
@@ -824,30 +822,44 @@ function PriorityRing({ task }: { task: Task }) {
           ? 'text-amber-400'
           : 'text-slate-400'
 
-  // Bij potentieel zonder data (= score null) gebruikt het preprocess-
-  // script intern de neutrale waarde 3 om de priority te kunnen berekenen.
-  // Hier doen we hetzelfde, maar tonen het in de breakdown wel als
-  // "onbekend" zodat duidelijk is dat dit een neutrale aanname is.
+  // Wanneer potentieel.score = null (geen betaalhistorie) is de priority
+  // genormaliseerd: potentieel valt weg en de overige gewichten zijn naar
+  // rato opgehoogd. Die werkelijk gebruikte gewichten staan in
+  // `task.priority_weights`. Zo tonen we in de breakdown precies wat er
+  // gerekend is — geen verzonnen waarde.
+  const w = task.priority_weights
   const potentieelScore = task.potentieel.score
-  const potentieelVoorCalc = potentieelScore ?? 3
+  const genormaliseerd = w.genormaliseerd
   const calc = {
-    impact: task.impact.score * WEIGHTS.impact,
-    urgentie: task.urgentie.score * WEIGHTS.urgentie,
-    risico: task.risico.score * WEIGHTS.risico,
-    potentieel: potentieelVoorCalc * WEIGHTS.potentieel,
+    impact: task.impact.score * w.impact,
+    urgentie: task.urgentie.score * w.urgentie,
+    risico: task.risico.score * w.risico,
+    potentieel: (potentieelScore ?? 0) * w.potentieel,
   }
 
-  const rows: { label: string; score: number | null; pct: number; bijdrage: number }[] = [
-    { label: 'Hoeveel levert dit op', score: task.impact.score, pct: 40, bijdrage: calc.impact },
-    { label: 'Hoe dringend', score: task.urgentie.score, pct: 30, bijdrage: calc.urgentie },
-    { label: 'Hoe risicovol', score: task.risico.score, pct: 20, bijdrage: calc.risico },
+  const rows: {
+    label: string
+    score: number | null
+    weight: number
+    bijdrage: number
+    nietMeegewogen?: boolean
+  }[] = [
+    { label: 'Hoeveel levert dit op', score: task.impact.score, weight: w.impact, bijdrage: calc.impact },
+    { label: 'Hoe dringend', score: task.urgentie.score, weight: w.urgentie, bijdrage: calc.urgentie },
+    { label: 'Hoe risicovol', score: task.risico.score, weight: w.risico, bijdrage: calc.risico },
     {
       label: 'Hoeveel sneller mogelijk',
       score: potentieelScore,
-      pct: 10,
+      weight: w.potentieel,
       bijdrage: calc.potentieel,
+      nietMeegewogen: genormaliseerd,
     },
   ]
+
+  const formatPct = (weight: number) => {
+    const pct = weight * 100
+    return pct % 1 === 0 ? `${pct.toFixed(0)}%` : `${fmtNL(pct, 1)}%`
+  }
 
   return (
     <div className="group relative inline-block">
@@ -913,12 +925,14 @@ function PriorityRing({ task }: { task: Task }) {
                   <tr key={r.label}>
                     <td className="text-white/80 pr-2 py-0.5">{r.label}</td>
                     <td className="text-white/60 text-right whitespace-nowrap px-2">
-                      {r.score === null
-                        ? `onbekend (3) × ${r.pct}%`
-                        : `${fmtNL(r.score, r.score % 1 === 0 ? 0 : 1)} × ${r.pct}%`}
+                      {r.nietMeegewogen
+                        ? 'niet meegewogen'
+                        : r.score === null
+                          ? `onbekend × ${formatPct(r.weight)}`
+                          : `${fmtNL(r.score, r.score % 1 === 0 ? 0 : 1)} × ${formatPct(r.weight)}`}
                     </td>
                     <td className="text-right whitespace-nowrap pl-2">
-                      {fmtNL(r.bijdrage, 2)}
+                      {r.nietMeegewogen ? '—' : fmtNL(r.bijdrage, 2)}
                     </td>
                   </tr>
                 ))}
@@ -941,12 +955,14 @@ function PriorityRing({ task }: { task: Task }) {
                   <tr key={r.label}>
                     <td className="text-white/80 pr-2 py-0.5">{r.label}</td>
                     <td className="text-white/60 text-right whitespace-nowrap px-2">
-                      {r.score === null
-                        ? `onbekend (gerekend als 3) × ${r.pct}%`
-                        : `${fmtNL(r.score, r.score % 1 === 0 ? 0 : 1)} × ${r.pct}%`}
+                      {r.nietMeegewogen
+                        ? 'niet meegewogen'
+                        : r.score === null
+                          ? `onbekend × ${formatPct(r.weight)}`
+                          : `${fmtNL(r.score, r.score % 1 === 0 ? 0 : 1)} × ${formatPct(r.weight)}`}
                     </td>
                     <td className="text-right whitespace-nowrap pl-2">
-                      {fmtNL(r.bijdrage, 2)}
+                      {r.nietMeegewogen ? '—' : fmtNL(r.bijdrage, 2)}
                     </td>
                   </tr>
                 ))}
@@ -957,6 +973,12 @@ function PriorityRing({ task }: { task: Task }) {
                 </tr>
               </tbody>
             </table>
+            {genormaliseerd && (
+              <p className="text-[10px] text-white/60 mt-2 leading-snug">
+                Geen betaalhistorie beschikbaar, dus de overige gewichten zijn
+                naar rato opgehoogd (40/30/20 → 44,4/33,3/22,2%).
+              </p>
+            )}
             <p className="text-[10px] text-white/60 mt-2">{priorityHint(score)}</p>
             {task.voorspelling && (
               <p className="text-[10px] text-white/60 mt-2 border-t border-white/10 pt-2">
@@ -2139,6 +2161,18 @@ function DebtorStatsBar({ task, showSources }: { task: Task; showSources: boolea
         : v.median_dso_dagen > 0
           ? `~${v.median_dso_dagen} dagen ná de vervaldatum`
           : `~${Math.abs(v.median_dso_dagen)} dagen vóór de vervaldatum`
+    const bronTekst = v.median_dso_bron.endsWith('-fallback')
+      ? 'over de laatste 12 maanden'
+      : 'over de laatste 3 maanden'
+    const baselineAfwijkt =
+      v.median_dso_baseline_dagen !== v.median_dso_dagen &&
+      !v.median_dso_bron.endsWith('-fallback')
+    const baselineTekst =
+      v.median_dso_baseline_dagen === 0
+        ? 'precies op de vervaldatum'
+        : v.median_dso_baseline_dagen > 0
+          ? `${v.median_dso_baseline_dagen}d ná de vervaldatum`
+          : `${Math.abs(v.median_dso_baseline_dagen)}d vóór de vervaldatum`
     stats.push({
       label: 'Verwachte betaaldatum',
       value: (
@@ -2170,7 +2204,17 @@ function DebtorStatsBar({ task, showSources }: { task: Task; showSources: boolea
                   </span>
                   .
                 </li>
-                <li>Deze klant betaalt normaal {dsoTekst}.</li>
+                <li>
+                  Deze klant betaalt {bronTekst} {dsoTekst}, dus rond{' '}
+                  <span className="tabular-nums">{fmtFull(v.raw_target)}</span>
+                  .
+                  {baselineAfwijkt && (
+                    <span className="block text-white/50 mt-0.5">
+                      (12-mnd-baseline is {baselineTekst} — recent gedrag wijkt
+                      af, dus we gebruiken het recente cijfer)
+                    </span>
+                  )}
+                </li>
                 <li>
                   En doet dat meestal op {v.pattern_value.toLowerCase()}.
                 </li>
@@ -2208,7 +2252,7 @@ function DebtorStatsBar({ task, showSources }: { task: Task; showSources: boolea
   return (
     <section className="border border-slate-200 rounded-md p-4">
       <h4 className="font-medium text-slate-900 mb-3">Debiteur-context</h4>
-      <dl className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <dl className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {stats.map((s) => (
           <div key={s.label}>
             <dt className="text-xs text-slate-500 uppercase tracking-wide">{s.label}</dt>
@@ -2403,13 +2447,21 @@ function RisicoBreakdown({ task, showSources }: { task: Task; showSources: boole
 }
 
 function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
+  // Werkelijk gebruikte gewichten — bij potentieel = null is de berekening
+  // genormaliseerd (40/30/20 → 44,4/33,3/22,2%) en valt potentieel weg.
+  const w = task.priority_weights
+  const genormaliseerd = w.genormaliseerd
   const calc = {
-    impact: task.impact.score * WEIGHTS.impact,
-    urgentie: task.urgentie.score * WEIGHTS.urgentie,
-    risico: task.risico.score * WEIGHTS.risico,
-    potentieel: (task.potentieel.score ?? 3) * WEIGHTS.potentieel,
+    impact: task.impact.score * w.impact,
+    urgentie: task.urgentie.score * w.urgentie,
+    risico: task.risico.score * w.risico,
+    potentieel: (task.potentieel.score ?? 0) * w.potentieel,
   }
   const total = calc.impact + calc.urgentie + calc.risico + calc.potentieel
+  const fmtPct = (weight: number) => {
+    const pct = weight * 100
+    return pct % 1 === 0 ? `${pct.toFixed(0)}%` : `${fmtNL(pct, 1)}%`
+  }
 
   const data = getDebtorData(task)
   const taakFacturen = data?.taakFacturen ?? []
@@ -2809,29 +2861,37 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
         <section className="border border-slate-200 rounded-md p-4">
           <h4 className="font-medium text-slate-900 mb-1">Zo komt deze prioriteit tot stand</h4>
           <p className="text-sm text-slate-600 mb-3">
-            Vier scores van 0 tot 5, elk met een eigen gewicht. Optellen geeft de prioriteit.
+            {genormaliseerd
+              ? 'Geen betaalhistorie voor deze klant — "Hoeveel sneller mogelijk" valt weg en de overige gewichten zijn naar rato opgehoogd.'
+              : 'Vier scores van 0 tot 5, elk met een eigen gewicht. Optellen geeft de prioriteit.'}
           </p>
           <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
             <span className="text-slate-600">Hoeveel levert dit op</span>
             <span className="text-slate-500">{fmtNL(task.impact.score, 1)}</span>
-            <span className="text-slate-400">× 40%</span>
+            <span className="text-slate-400">× {fmtPct(w.impact)}</span>
             <span className="text-slate-700 text-right">{fmtNL(calc.impact, 2)}</span>
             <span className="text-slate-600">Hoe dringend</span>
             <span className="text-slate-500">{fmtNL(task.urgentie.score, 0)}</span>
-            <span className="text-slate-400">× 30%</span>
+            <span className="text-slate-400">× {fmtPct(w.urgentie)}</span>
             <span className="text-slate-700 text-right">{fmtNL(calc.urgentie, 2)}</span>
             <span className="text-slate-600">Hoe risicovol</span>
             <span className="text-slate-500">{fmtNL(task.risico.score, 1)}</span>
-            <span className="text-slate-400">× 20%</span>
+            <span className="text-slate-400">× {fmtPct(w.risico)}</span>
             <span className="text-slate-700 text-right">{fmtNL(calc.risico, 2)}</span>
-            <span className="text-slate-600">Hoeveel sneller mogelijk</span>
-            <span className="text-slate-500">
-              {task.potentieel.score === null
-                ? 'onbekend (3)'
-                : fmtNL(task.potentieel.score, 0)}
+            <span className={genormaliseerd ? 'text-slate-400 italic' : 'text-slate-600'}>
+              Hoeveel sneller mogelijk
             </span>
-            <span className="text-slate-400">× 10%</span>
-            <span className="text-slate-700 text-right">{fmtNL(calc.potentieel, 2)}</span>
+            <span className={genormaliseerd ? 'text-slate-400 italic' : 'text-slate-500'}>
+              {genormaliseerd
+                ? 'onbekend'
+                : fmtNL(task.potentieel.score ?? 0, 0)}
+            </span>
+            <span className={genormaliseerd ? 'text-slate-400 italic' : 'text-slate-400'}>
+              {genormaliseerd ? 'niet meegewogen' : `× ${fmtPct(w.potentieel)}`}
+            </span>
+            <span className={genormaliseerd ? 'text-slate-400 italic text-right' : 'text-slate-700 text-right'}>
+              {genormaliseerd ? '—' : fmtNL(calc.potentieel, 2)}
+            </span>
             <span className="text-slate-900 font-medium border-t border-slate-200 pt-1.5 mt-1">
               Totaal
             </span>
@@ -2842,10 +2902,13 @@ function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
           </div>
           {showSources && (
             <p className="font-mono text-xs text-slate-400 mt-3">
-              ({fmtNL(task.impact.score, 1)} × 0,4) + ({fmtNL(task.urgentie.score, 0)} × 0,3) + (
-              {fmtNL(task.risico.score, 1)} × 0,2) + (
-              {task.potentieel.score === null ? '3 (onbekend)' : fmtNL(task.potentieel.score, 0)} ×
-              0,1) = {fmtNL(total, 2)}
+              ({fmtNL(task.impact.score, 1)} × {fmtNL(w.impact, 4)}) + (
+              {fmtNL(task.urgentie.score, 0)} × {fmtNL(w.urgentie, 4)}) + (
+              {fmtNL(task.risico.score, 1)} × {fmtNL(w.risico, 4)})
+              {genormaliseerd
+                ? ''
+                : ` + (${fmtNL(task.potentieel.score ?? 0, 0)} × ${fmtNL(w.potentieel, 4)})`}{' '}
+              = {fmtNL(total, 2)}
             </p>
           )}
         </section>
