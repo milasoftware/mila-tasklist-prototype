@@ -435,15 +435,56 @@ export const EFFECT_LABEL: Record<EffectType, string> = {
   administratief: 'Administratief',
 }
 
-export const tasks: Task[] = generated.tasks as Task[]
-export const debiteuren: Debiteur[] = generated.debiteuren as Debiteur[]
-export const facturen: Factuur[] = generated.facturen as Factuur[]
-export const betalingen: Betaling[] = generated.betalingen as Betaling[]
-export const losseBetalingen: LosseBetaling[] = (generated as { losseBetalingen?: LosseBetaling[] })
+export type GeneratedDataset = {
+  meta: Meta
+  tasks: Task[]
+  debiteuren: Debiteur[]
+  facturen: Factuur[]
+  betalingen: Betaling[]
+  losseBetalingen?: LosseBetaling[]
+  auditLog?: AuditEntry[]
+}
+
+const UPLOADED_DATA_KEY = 'mila.uploadedData.v1'
+
+function isGeneratedDataset(value: unknown): value is GeneratedDataset {
+  const maybe = value as Partial<GeneratedDataset> | null
+  return !!maybe && Array.isArray(maybe.tasks) && !!maybe.meta
+}
+
+function readUploadedDataset(): GeneratedDataset | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(UPLOADED_DATA_KEY)
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    return isGeneratedDataset(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+export function saveUploadedDataset(dataset: GeneratedDataset) {
+  window.localStorage.setItem(UPLOADED_DATA_KEY, JSON.stringify(dataset))
+}
+
+export function clearUploadedDataset() {
+  window.localStorage.removeItem(UPLOADED_DATA_KEY)
+}
+
+const uploadedDataset = readUploadedDataset()
+const activeDataset = uploadedDataset ?? (generated as GeneratedDataset)
+
+export const isUsingUploadedDataset = uploadedDataset !== null
+export const tasks: Task[] = activeDataset.tasks as Task[]
+export const debiteuren: Debiteur[] = activeDataset.debiteuren as Debiteur[]
+export const facturen: Factuur[] = activeDataset.facturen as Factuur[]
+export const betalingen: Betaling[] = activeDataset.betalingen as Betaling[]
+export const losseBetalingen: LosseBetaling[] = (activeDataset as { losseBetalingen?: LosseBetaling[] })
   .losseBetalingen ?? []
-export const meta: Meta = generated.meta as Meta
+export const meta: Meta = activeDataset.meta as Meta
 export const auditLog: AuditEntry[] =
-  ((generated as { auditLog?: AuditEntry[] }).auditLog ?? []) as AuditEntry[]
+  ((activeDataset as { auditLog?: AuditEntry[] }).auditLog ?? []) as AuditEntry[]
 
 // Lookup-helpers — gebruikt door UI voor het renderen van debiteur-historie
 // in het detailpaneel.
