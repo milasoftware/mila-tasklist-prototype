@@ -3,6 +3,7 @@ import type React from 'react'
 import { meta, type Task } from '../data'
 import { fmtDM, fmtNL, priorityTone } from '../detail/format'
 import { standaardBetaaldagLabel } from '../detail/plain-language'
+import { DataUploadButton } from './DataUploadButton'
 
 export function TaskRow({ task, selected, onClick }: { task: Task; selected: boolean; onClick: () => void }) {
   const factuurCount = task.gerelateerde_facturen?.length ?? (task.factuurnummer ? 1 : 0)
@@ -160,9 +161,12 @@ export function ListView({
         showSources={showSources}
         setShowSources={setShowSources}
         rightSlot={
-          <p className="text-sm text-slate-500 tabular-nums">
-            {q ? `${filtered.length} van ${sorted.length} taken` : `${sorted.length} taken`}
-          </p>
+          <>
+            <DataUploadButton />
+            <p className="text-sm text-slate-500 tabular-nums">
+              {q ? `${filtered.length} van ${sorted.length} taken` : `${sorted.length} taken`}
+            </p>
+          </>
         }
       />
       <main className="max-w-5xl mx-auto px-6 py-6">
