@@ -761,6 +761,35 @@ export function buildGeneratedDataFromRaw({
     const fysiekeBetaaldata = fysiekeBetaaldataByDeb.get(debNr) ?? []
     const pattern = detectPattern(fysiekeBetaaldata)
 
+    // ---- AI-sub-parameter: afwijking van betaalgedrag ----------------------
+    // Vangt de "historisch nette betaler die nu fors afwijkt"-situatie: een
+    // klant met een lage 12-maands mediaan-DSO maar oplopende vervallen posten
+    // wordt door de gemiddelde-regel verdund (bv. D013052/D103808). Deze
+    // sub-score meet hoe ver de oudste vervallen post voorbij het normale
+    // betaalgedrag ligt.
+    //   anker     = max(0, 12-maands mediaan-DSO) — geclampt op 0 zodat een
+    //               structurele vroegbetaler niet wordt gestraft omdat hij
+    //               normaal vóórloopt; de norm is "op tijd" (0 dagen).
+    //   afwijking = oudste_vervallen_dagen − anker
+    // Schaal: ≤0 →1, 1-5 →2, 6-10 →3, 11-20 →4, >20 →5.
+    // Edge cases:
+    //   - geen betaalhistorie (dsoVals leeg) → null (telt niet mee; de
+    //     DSO-edge-case vangt dit geval al af via from_overdue).
+    //   - geen vervallen posten (oldestDays 0) → score 1.
+    const heeftDsoHistorie = dsoVals.length > 0
+    let afwijkingScore = null
+    let afwijkingAnker = null
+    let afwijkingDagen = null
+    if (heeftDsoHistorie) {
+      afwijkingAnker = Math.max(0, medianDaysLate)
+      afwijkingDagen = oldestDays - afwijkingAnker
+      if (afwijkingDagen <= 0) afwijkingScore = 1
+      else if (afwijkingDagen <= 5) afwijkingScore = 2
+      else if (afwijkingDagen <= 10) afwijkingScore = 3
+      else if (afwijkingDagen <= 20) afwijkingScore = 4
+      else afwijkingScore = 5
+    }
+
     // ---- Aggregaat betaalgedrag --------------------------------------------
     // Gemiddelde van beschikbare sub-scores: DSO altijd, trend + volatiliteit
     // alleen wanneer confidence != 'geen'. Wanbetaler-voorspelling wordt
@@ -768,7 +797,15 @@ export function buildGeneratedDataFromRaw({
     const subScores = [dsoScore]
     if (trendScore !== null) subScores.push(trendScore)
     if (volatiliteitScore !== null) subScores.push(volatiliteitScore)
-    const betaalgedrag = subScores.reduce((a, b) => a + b, 0) / subScores.length
+    const betaalgedragGemiddeld = subScores.reduce((a, b) => a + b, 0) / subScores.length
+    // Max-regel: de afwijking-score mag het betaalgedrag alleen omhoog
+    // trekken, nooit verdunnen. Zo blijft een historisch nette betaler met
+    // fors oplopende achterstand zichtbaar als risico in plaats van weggemiddeld
+    // te worden door zijn goede trend/voorspelbaarheid.
+    const betaalgedrag =
+      afwijkingScore !== null
+        ? Math.max(betaalgedragGemiddeld, afwijkingScore)
+        : betaalgedragGemiddeld
 
     // Huidige stand — gemiddelde van twee sub-scores volgens risicoscore-spec:
     //   1. % vervallen (hoe groot is het probleem nu)
@@ -938,6 +975,16 @@ export function buildGeneratedDataFromRaw({
           cv: round(cv, 2),
           intervals_observed: intervals.length,
           explanation: volatiliteitExplanation,
+        },
+        afwijking: {
+          score: afwijkingScore,
+          anker_dagen: afwijkingAnker === null ? null : Math.round(afwijkingAnker),
+          overschrijding_dagen: afwijkingDagen === null ? null : Math.round(afwijkingDagen),
+          oudste_dagen_vervallen: oldestDays,
+          median_days_late: heeftDsoHistorie ? Math.round(medianDaysLate) : null,
+          // Het gemiddelde van de overige sub-scores vóór de max-regel — zodat
+          // de UI kan tonen waarom betaalgedrag op deze waarde uitkomt.
+          gemiddelde_subscores: round(betaalgedragGemiddeld, 2),
         },
       },
       pattern,

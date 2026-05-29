@@ -211,6 +211,23 @@ export type BetaalgedragBreakdown = {
     intervals_observed: number
     explanation: string
   }
+  // Afwijking van betaalgedrag: hoe ver staat de oudste vervallen post
+  // voorbij de norm (12-maands mediaan-DSO, geclampt op 0). Vangt de
+  // historisch nette betaler met fors oplopende achterstand. Trekt het
+  // betaalgedrag via een max-regel omhoog (nooit omlaag). Optioneel zodat
+  // oudere/geüploade datasets zonder dit veld blijven werken.
+  afwijking?: {
+    // null = geen betaalhistorie (12-mnd venster leeg) → telt niet mee.
+    score: number | null
+    // Anker = max(0, mediaan-DSO). null bij geen historie.
+    anker_dagen: number | null
+    // oudste_vervallen_dagen − anker. null bij geen historie.
+    overschrijding_dagen: number | null
+    oudste_dagen_vervallen: number
+    median_days_late: number | null
+    // Gemiddelde van dso/trend/volatiliteit vóór de max-regel.
+    gemiddelde_subscores: number
+  }
 }
 
 export type PatternInfo = {

@@ -4,12 +4,28 @@ const SNAPSHOT = new Date(meta.snapshot_datum)
 export const daysOverdue = (vervaldatum: string) =>
   Math.floor((SNAPSHOT.getTime() - new Date(vervaldatum).getTime()) / 86400000)
 
-export const fmtEUR = (n: number) =>
-  n.toLocaleString('nl-NL', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
-export const fmtNL = (n: number, dec = 1) =>
-  n.toLocaleString('nl-NL', { minimumFractionDigits: dec, maximumFractionDigits: dec })
-export const fmtDM = (iso: string) => {
+// Defensieve formatters: JSON kent geen `undefined`, dus alle missende
+// numerieke velden in geüploade datasets komen als `null` binnen. Eerder
+// crashte `(null).toLocaleString(...)` de hele detail-pagina. We vangen
+// daarom `null | undefined | NaN` af en geven een nette fallback ('—')
+// terug, zodat de UI per veld degradeert i.p.v. de hele view om te
+// vallen.
+export const fmtEUR = (n: number | null | undefined): string => {
+  if (n == null || Number.isNaN(n)) return '—'
+  return n.toLocaleString('nl-NL', {
+    style: 'currency',
+    currency: 'EUR',
+    maximumFractionDigits: 0,
+  })
+}
+export const fmtNL = (n: number | null | undefined, dec = 1): string => {
+  if (n == null || Number.isNaN(n)) return '—'
+  return n.toLocaleString('nl-NL', { minimumFractionDigits: dec, maximumFractionDigits: dec })
+}
+export const fmtDM = (iso: string | null | undefined): string => {
+  if (!iso) return '—'
   const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
   return `${String(d.getUTCDate()).padStart(2, '0')}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
 }
 

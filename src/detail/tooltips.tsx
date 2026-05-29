@@ -23,7 +23,7 @@ export function tooltipImpact(score: number, bedrag: number | undefined): React.
         { score: 5, label: `≥ ${fmtEUR(t[3])}` },
       ]}
       activeScore={score}
-      current={bedrag !== undefined ? `Deze taak: ${fmtEUR(bedrag)} → score ${score}` : undefined}
+      current={bedrag != null ? `Deze taak: ${fmtEUR(bedrag)} → score ${score}` : undefined}
     />
   )
 }
@@ -42,7 +42,7 @@ export function tooltipUrgentie(score: number, dagenVervallen: number | undefine
       ]}
       activeScore={score}
       current={
-        dagenVervallen !== undefined
+        dagenVervallen != null
           ? `Oudste factuur ${dagenVervallen}d vervallen → score ${score}`
           : undefined
       }
@@ -65,7 +65,7 @@ export function tooltipPotentieel(
   const currentTxt =
     score === null
       ? 'Geen betaalhistorie — werkelijke termijn niet te bepalen, score is onbekend.'
-      : dsoImpact != null && beinvloedbareDagen != null && totalOpen !== undefined
+      : dsoImpact != null && beinvloedbareDagen != null && totalOpen != null
         ? `${beinvloedbareDagen}d beïnvloedbaar × ${fmtEUR(totalOpen)} = ${fmtED(dsoImpact)} → score ${score}`
         : undefined
   return (
@@ -124,9 +124,16 @@ export function risicoBullets(task: Task): string[] {
     if (vol.confidence !== 'geen' && vol.score != null && vol.score >= 4) {
       bullets.push('Betaalt grillig — moeilijk te voorspellen wanneer betaald wordt.')
     }
+
+    const afw = r.betaalgedrag_breakdown.afwijking
+    if (afw && afw.score != null && afw.score >= 4 && (afw.overschrijding_dagen ?? 0) > 0) {
+      bullets.push(
+        `Wijkt sterk af van normaal betaalgedrag — oudste post ${afw.overschrijding_dagen} dagen voorbij de norm (${afw.anker_dagen}d).`,
+      )
+    }
   }
 
-  if (r.huidige_stand_pct_vervallen !== undefined && r.huidige_stand_pct_vervallen > 0) {
+  if (r.huidige_stand_pct_vervallen != null && r.huidige_stand_pct_vervallen > 0) {
     const pct = Math.round(r.huidige_stand_pct_vervallen)
     const oudste = r.huidige_stand_oudste_dagen
     bullets.push(
@@ -340,6 +347,48 @@ export function tooltipVolatiliteit(
   )
 }
 
+export function tooltipAfwijking(
+  score: number | null,
+  ankerDagen: number | null,
+  overschrijdingDagen: number | null,
+  oudsteDagen: number,
+  medianDaysLate: number | null,
+  gemiddeldeSubscores: number,
+  betaalgedrag: number,
+): React.ReactNode {
+  const heeftHistorie = score !== null
+  const maxRegelActief = heeftHistorie && (score ?? 0) > gemiddeldeSubscores
+  return (
+    <ScoreTooltip
+      title="Hoeveel afwijking van betaalgedrag"
+      description={
+        'Hoe ver ligt de oudste vervallen post voorbij wat normaal is voor deze klant? ' +
+        'Anker = de 12-maands mediaan-DSO, geclampt op 0 (een klant die normaal vóór de ' +
+        'vervaldatum betaalt, krijgt norm "op tijd"). Afwijking = oudste vervallen post − anker. ' +
+        'Vangt de historisch nette betaler die nu fors oploopt. Telt via een max-regel mee in ' +
+        '"Hoe is het betaalgedrag": het mag de score alleen omhoog trekken, nooit verdunnen.'
+      }
+      thresholds={[
+        { score: 1, label: '≤ 0 dagen voorbij norm (binnen gedrag)' },
+        { score: 2, label: '1 – 5 dagen voorbij norm' },
+        { score: 3, label: '6 – 10 dagen voorbij norm' },
+        { score: 4, label: '11 – 20 dagen voorbij norm' },
+        { score: 5, label: '> 20 dagen voorbij norm' },
+      ]}
+      activeScore={score}
+      current={
+        !heeftHistorie
+          ? 'Geen betaalhistorie in de afgelopen 12 maanden → geen score (telt niet mee).'
+          : `Norm ${medianDaysLate}d → anker ${ankerDagen}d, oudste vervallen post ${oudsteDagen}d ` +
+            `→ ${overschrijdingDagen}d voorbij norm → score ${score}. ` +
+            (maxRegelActief
+              ? `Max-regel actief: betaalgedrag opgetrokken van gemiddeld ${gemiddeldeSubscores.toFixed(1)} naar ${betaalgedrag.toFixed(1)}.`
+              : `Gemiddelde sub-scores (${gemiddeldeSubscores.toFixed(1)}) is leidend; deze score trekt niet op.`)
+      }
+    />
+  )
+}
+
 export function tooltipHuidigeStand(
   score: number,
   pctVervallen: number | undefined,
@@ -372,7 +421,7 @@ export function tooltipHuidigeStand(
               <tr>
                 <td className="pr-2 py-0.5">% vervallen</td>
                 <td className="text-right pr-1">
-                  {pctVervallen !== undefined ? `${Math.round(pctVervallen)}%` : '—'}
+                  {pctVervallen != null ? `${Math.round(pctVervallen)}%` : '—'}
                 </td>
                 <td className="text-white/50 pl-2 text-right">
                   → score {pctScore ?? '—'}
@@ -381,7 +430,7 @@ export function tooltipHuidigeStand(
               <tr>
                 <td className="pr-2 py-0.5">Oudste post</td>
                 <td className="text-right pr-1">
-                  {oudsteDagen !== undefined ? `${oudsteDagen}d` : '—'}
+                  {oudsteDagen != null ? `${oudsteDagen}d` : '—'}
                 </td>
                 <td className="text-white/50 pl-2 text-right">
                   → score {oudsteScore ?? '—'}
@@ -462,9 +511,9 @@ export function tooltipOmzetconcentratie(
     ? `Top 20% van ${populatieN} debiteuren in deze ${scopeLabel} (op netto omzet, ex BTW).`
     : `Quintielen binnen deze ${scopeLabel} (netto omzet, ex BTW).`
   const currentRegel =
-    debiteurOmzet !== undefined && pctOmzet !== undefined
+    debiteurOmzet != null && pctOmzet != null
       ? `${fmtEUR(debiteurOmzet)} netto · ${pctOmzet.toFixed(2)}% van netto jaaromzet → score ${score}`
-      : pctOmzet !== undefined
+      : pctOmzet != null
         ? `${pctOmzet.toFixed(2)}% van netto jaaromzet → score ${score}`
         : undefined
   return (
@@ -514,14 +563,14 @@ export function tooltipKrediet(
               <tr>
                 <td className="pr-2 py-0.5">% onverzekerd</td>
                 <td className="text-right pr-1">
-                  {onverzekerdPct !== undefined ? `${onverzekerdPct.toFixed(0)}%` : '—'}
+                  {onverzekerdPct != null ? `${onverzekerdPct.toFixed(0)}%` : '—'}
                 </td>
                 <td className="text-white/50 pl-2 text-right">→ score {pctScore ?? '—'}</td>
               </tr>
               <tr>
                 <td className="pr-2 py-0.5">Impact (€)</td>
                 <td className="text-right pr-1">
-                  {onverzekerdBedrag !== undefined ? fmtEUR(onverzekerdBedrag) : '—'}
+                  {onverzekerdBedrag != null ? fmtEUR(onverzekerdBedrag) : '—'}
                 </td>
                 <td className="text-white/50 pl-2 text-right">→ score {impactScore ?? '—'}</td>
               </tr>
@@ -609,17 +658,17 @@ export function tooltipStandaardBetaaldag(p: PatternInfo): React.ReactNode {
           <span className="text-white/50">Op basis van</span>
           <span>{p.payments_observed} betaaldagen</span>
         </div>
-        {p.venster_maanden !== undefined && (
+        {p.venster_maanden != null && (
           <div className="flex justify-between gap-3">
             <span className="text-white/50">Venster</span>
             <span>laatste {p.venster_maanden} mnd</span>
           </div>
         )}
-        {p.min_hits !== undefined && p.min_fit_pct !== undefined && (
+        {p.min_hits != null && p.min_fit_pct != null && (
           <div className="flex justify-between gap-3">
             <span className="text-white/50">Beslisregel</span>
             <span className="text-right">
-              {p.high_volume_hits !== undefined && p.high_volume_fit_pct !== undefined ? (
+              {p.high_volume_hits != null && p.high_volume_fit_pct != null ? (
                 <>
                   ≥{p.high_volume_hits} hits + ≥{p.high_volume_fit_pct}%
                   <br />

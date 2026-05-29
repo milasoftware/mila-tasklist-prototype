@@ -4,9 +4,9 @@ import { getAuditVoorDebiteur, getLosseBetalingenVoorDebiteur, meta, type AuditE
 import { AppHeader } from '../list/ListView'
 import { daysOverdue, fmtDM, fmtEUR, fmtNL } from './format'
 import { ComponentBlock, MetricCard, ScoreRow, SourceLine, StatWithTooltip } from './components'
-import { getDebtorData } from './data-derivations'
+import { derivePriorityWeights, getDebtorData } from './data-derivations'
 import { priorityHint, standaardBetaaldagLabel, trendPlain, volatiliteitPlain } from './plain-language'
-import { tooltipDso, tooltipHuidigeStand, tooltipImpact, tooltipKrediet, tooltipOmzetconcentratie, tooltipPotentieel, tooltipRisico, tooltipStandaardBetaaldag, tooltipTrend, tooltipUrgentie, tooltipVolatiliteit } from './tooltips'
+import { tooltipAfwijking, tooltipDso, tooltipHuidigeStand, tooltipImpact, tooltipKrediet, tooltipOmzetconcentratie, tooltipPotentieel, tooltipRisico, tooltipStandaardBetaaldag, tooltipTrend, tooltipUrgentie, tooltipVolatiliteit } from './tooltips'
 import { DsoThermometer, HuidigeStandBar, KredietDekkingBar, KredietImpactBar, OmzetPercentilesBar, PercentilesBar, PotentieelImpactBar, TrendSparkline, UrgentieThermometer, VolatilityDotStrip } from './visualizations'
 
 // Cirkelvormige priority-indicator met hover-tooltip die de opbouw toont.
@@ -34,8 +34,9 @@ export function PriorityRing({ task }: { task: Task }) {
   // genormaliseerd: potentieel valt weg en de overige gewichten zijn naar
   // rato opgehoogd. Die werkelijk gebruikte gewichten staan in
   // `task.priority_weights`. Zo tonen we in de breakdown precies wat er
-  // gerekend is — geen verzonnen waarde.
-  const w = task.priority_weights
+  // gerekend is — geen verzonnen waarde. derivePriorityWeights vangt
+  // oudere geüploade datasets op die dit veld nog niet hebben.
+  const w = derivePriorityWeights(task)
   const potentieelScore = task.potentieel.score
   const genormaliseerd = w.genormaliseerd
   const calc = {
@@ -730,7 +731,8 @@ export function RisicoBreakdown({ task, showSources }: { task: Task; showSources
 export function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
   // Werkelijk gebruikte gewichten — bij potentieel = null is de berekening
   // genormaliseerd (40/30/20 → 44,4/33,3/22,2%) en valt potentieel weg.
-  const w = task.priority_weights
+  // derivePriorityWeights vangt oudere datasets zonder dit veld op.
+  const w = derivePriorityWeights(task)
   const genormaliseerd = w.genormaliseerd
   const calc = {
     impact: task.impact.score * w.impact,
@@ -787,11 +789,11 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
           score={task.impact.score}
           tooltip={tooltipImpact(task.impact.score, task.impact.bedrag)}
           lead={
-            task.impact.bedrag !== undefined ? (
+            task.impact.bedrag != null ? (
               <p>
                 <span className="text-slate-500">Bedrag dat hiermee binnenkomt: </span>
                 {fmtEUR(task.impact.bedrag)}
-                {showSources && task.impact.pct_van_ar !== undefined && (
+                {showSources && task.impact.pct_van_ar != null && (
                   <span className="text-slate-400">
                     {' '}
                     ({fmtNL(task.impact.pct_van_ar, 1)}% van totaal openstaand)
@@ -801,7 +803,7 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
             ) : undefined
           }
         >
-          {task.impact.bedrag !== undefined && (
+          {task.impact.bedrag != null && (
             <PercentilesBar
               activeScore={task.impact.bedrag_score}
               taakBedrag={task.impact.bedrag}
@@ -825,7 +827,7 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
           tooltip={tooltipUrgentie(task.urgentie.score, task.urgentie.dagen_vervallen)}
         >
           <p className="text-slate-600">{task.urgentie.reden}</p>
-          {task.urgentie.dagen_vervallen !== undefined && (
+          {task.urgentie.dagen_vervallen != null && (
             <UrgentieThermometer
               days={task.urgentie.dagen_vervallen}
               score={task.urgentie.score}
@@ -880,7 +882,7 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
                 ) : (
                   <> — dat past binnen de afspraak.</>
                 )}{' '}
-                {beinvl > 0 && totalOpen !== undefined ? (
+                {beinvl > 0 && totalOpen != null ? (
                   <>
                     Boven de {respijt}d marge: <span className="font-medium">{beinvl}d</span>{' '}
                     beïnvloedbaar × {fmtEUR(totalOpen)} openstaand ={' '}
@@ -990,6 +992,40 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
                   ) : undefined
                 }
               />
+              {task.risico.betaalgedrag_breakdown.afwijking && (
+                <MetricCard
+                  title="Hoeveel afwijking van betaalgedrag"
+                  score={task.risico.betaalgedrag_breakdown.afwijking.score}
+                  tooltip={tooltipAfwijking(
+                    task.risico.betaalgedrag_breakdown.afwijking.score,
+                    task.risico.betaalgedrag_breakdown.afwijking.anker_dagen,
+                    task.risico.betaalgedrag_breakdown.afwijking.overschrijding_dagen,
+                    task.risico.betaalgedrag_breakdown.afwijking.oudste_dagen_vervallen,
+                    task.risico.betaalgedrag_breakdown.afwijking.median_days_late,
+                    task.risico.betaalgedrag_breakdown.afwijking.gemiddelde_subscores,
+                    task.risico.betaalgedrag,
+                  )}
+                  caption={
+                    task.risico.betaalgedrag_breakdown.afwijking.score == null
+                      ? 'Geen betaalhistorie — afwijking kan niet worden bepaald.'
+                      : task.risico.betaalgedrag_breakdown.afwijking.overschrijding_dagen != null &&
+                          task.risico.betaalgedrag_breakdown.afwijking.overschrijding_dagen > 0
+                        ? `Oudste vervallen post ligt ${task.risico.betaalgedrag_breakdown.afwijking.overschrijding_dagen} dagen voorbij de norm (${task.risico.betaalgedrag_breakdown.afwijking.anker_dagen}d).`
+                        : 'Oudste vervallen post valt binnen het normale betaalgedrag.'
+                  }
+                  viz={
+                    task.risico.betaalgedrag_breakdown.afwijking.overschrijding_dagen != null ? (
+                      <DsoThermometer
+                        days={Math.max(
+                          0,
+                          task.risico.betaalgedrag_breakdown.afwijking.overschrijding_dagen,
+                        )}
+                        score={task.risico.betaalgedrag_breakdown.afwijking.score ?? 1}
+                      />
+                    ) : undefined
+                  }
+                />
+              )}
             </>
           )}
           <MetricCard
@@ -1003,7 +1039,7 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
               task.risico.huidige_stand_oudste_score,
             )}
             caption={
-              task.risico.huidige_stand_pct_vervallen !== undefined
+              task.risico.huidige_stand_pct_vervallen != null
                 ? `${Math.round(task.risico.huidige_stand_pct_vervallen)}% van het openstaande bedrag is vervallen${
                     task.risico.huidige_stand_oudste_dagen
                       ? ` — oudste post ${task.risico.huidige_stand_oudste_dagen} dagen.`
@@ -1012,7 +1048,7 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
                 : undefined
             }
             viz={
-              task.risico.huidige_stand_pct_vervallen !== undefined ? (
+              task.risico.huidige_stand_pct_vervallen != null ? (
                 <HuidigeStandBar
                   pctVervallen={task.risico.huidige_stand_pct_vervallen}
                   oudsteDagen={task.risico.huidige_stand_oudste_dagen ?? 0}
@@ -1032,8 +1068,8 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
                 task.risico.krediet_impact_score,
               )}
               caption={
-                task.risico.krediet_openstaand !== undefined &&
-                task.risico.krediet_limiet !== undefined
+                task.risico.krediet_openstaand != null &&
+                task.risico.krediet_limiet != null
                   ? (() => {
                       const limiet = task.risico.krediet_limiet
                       const open = task.risico.krediet_openstaand
@@ -1060,8 +1096,8 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
                   : undefined
               }
               viz={
-                task.risico.krediet_onverzekerd_pct !== undefined &&
-                task.risico.krediet_onverzekerd_bedrag !== undefined &&
+                task.risico.krediet_onverzekerd_pct != null &&
+                task.risico.krediet_onverzekerd_bedrag != null &&
                 task.risico.krediet_impact_score != null &&
                 meta.krediet_buckets ? (
                   <div className="space-y-2">
@@ -1085,16 +1121,16 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
               task.risico.omzetconcentratie_omzet,
             )}
             caption={
-              task.risico.omzetconcentratie_pct !== undefined
+              task.risico.omzetconcentratie_pct != null
                 ? `Omzet van deze klant: ${
-                    task.risico.omzetconcentratie_omzet !== undefined
+                    task.risico.omzetconcentratie_omzet != null
                       ? `${fmtEUR(task.risico.omzetconcentratie_omzet)} netto`
                       : '—'
                   }. Goed voor ${task.risico.omzetconcentratie_pct.toFixed(2)}% van onze netto jaaromzet (${fmtEUR(meta.jaaromzet_totaal)} netto).`
                 : undefined
             }
             viz={
-              task.risico.omzetconcentratie_omzet !== undefined && meta.omzet_buckets ? (
+              task.risico.omzetconcentratie_omzet != null && meta.omzet_buckets ? (
                 <OmzetPercentilesBar
                   activeScore={task.risico.omzetconcentratie}
                   debiteurOmzet={task.risico.omzetconcentratie_omzet}

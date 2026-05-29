@@ -3,6 +3,7 @@ import { tasks } from './data'
 import { useHashRoute } from './routing'
 import { DetailView } from './detail/DetailView'
 import { ListView } from './list/ListView'
+import { ToastProvider } from './toast'
 
 
 
@@ -44,34 +45,38 @@ export default function App() {
       return null
     }
     return (
-      <div className={containerClasses}>
-        <DetailView
-          task={task}
-          showSources={showSources}
-          setShowSources={setShowSources}
-          onBack={() => navigate({ name: 'list' })}
-          index={index}
-          total={sorted.length}
-          onPrev={() =>
-            index > 0 && navigate({ name: 'detail', taskId: sorted[index - 1].id })
-          }
-          onNext={() =>
-            index < sorted.length - 1 &&
-            navigate({ name: 'detail', taskId: sorted[index + 1].id })
-          }
-        />
-      </div>
+      <ToastProvider>
+        <div className={containerClasses}>
+          <DetailView
+            task={task}
+            showSources={showSources}
+            setShowSources={setShowSources}
+            onBack={() => navigate({ name: 'list' })}
+            index={index}
+            total={sorted.length}
+            onPrev={() =>
+              index > 0 && navigate({ name: 'detail', taskId: sorted[index - 1].id })
+            }
+            onNext={() =>
+              index < sorted.length - 1 &&
+              navigate({ name: 'detail', taskId: sorted[index + 1].id })
+            }
+          />
+        </div>
+      </ToastProvider>
     )
   }
 
   return (
-    <div className={containerClasses}>
-      <ListView
-        sorted={sorted}
-        showSources={showSources}
-        setShowSources={setShowSources}
-        onSelectTask={(id) => navigate({ name: 'detail', taskId: id })}
-      />
-    </div>
+    <ToastProvider>
+      <div className={containerClasses}>
+        <ListView
+          sorted={sorted}
+          showSources={showSources}
+          setShowSources={setShowSources}
+          onSelectTask={(id) => navigate({ name: 'detail', taskId: id })}
+        />
+      </div>
+    </ToastProvider>
   )
 }
