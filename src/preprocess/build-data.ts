@@ -1074,18 +1074,19 @@ export function buildGeneratedDataFromRaw({
     const impactScore = bedragScore
     const urgentie = urgentieScore(c.oudste)
 
-    // Potentieel kan null zijn (= geen betaalhistorie, score onbekend).
-    // We normaliseren dan: de 10% van potentieel valt weg en de overige
-    // gewichten (40% / 30% / 20% = 90%) worden naar rato opgehoogd zodat
-    // ze samen weer 100% zijn (44,4% / 33,3% / 22,2%). Zo verzinnen we
-    // geen waarde voor iets wat we niet weten en tellen alleen de
-    // bekende signalen evenredig zwaarder mee.
+    // Gewogen priority. Risico weegt het zwaarst (40%) omdat een afwijkende
+    // of risicovolle klant ook bij een klein bedrag bovenaan moet kunnen
+    // komen. Potentieel kan null zijn (= geen betaalhistorie, score onbekend);
+    // dan valt de 10% van potentieel weg en worden de overige gewichten
+    // (30% / 20% / 40% = 90%) naar rato opgehoogd zodat ze samen weer 100%
+    // zijn (33,3% / 22,2% / 44,4%). Zo verzinnen we geen waarde voor iets wat
+    // we niet weten en tellen alleen de bekende signalen evenredig zwaarder.
     const potentieelBekend = scores.potentieel !== null
-    const wImpact = potentieelBekend ? 0.4 : 0.4 / 0.9
-    const wUrgentie = potentieelBekend ? 0.3 : 0.3 / 0.9
-    const wRisico = potentieelBekend ? 0.2 : 0.2 / 0.9
+    const wImpact = potentieelBekend ? 0.3 : 0.3 / 0.9
+    const wUrgentie = potentieelBekend ? 0.2 : 0.2 / 0.9
+    const wRisico = potentieelBekend ? 0.4 : 0.4 / 0.9
     const wPotentieel = potentieelBekend ? 0.1 : 0
-    const priorityOrigineel =
+    const priorityGewogen =
       impactScore * wImpact +
       urgentie * wUrgentie +
       scores.risicoScore * wRisico +
@@ -1097,6 +1098,17 @@ export function buildGeneratedDataFromRaw({
       potentieel: round(wPotentieel, 4),
       genormaliseerd: !potentieelBekend,
     }
+
+    // Gladde risico-ondergrens: priority is minimaal (risico − 0,5). Een hoog
+    // risico kan zo niet meer wegzakken onder een grote-maar-veilige post.
+    // Continu i.p.v. een trap, zodat er geen stapeling op één waarde ontstaat
+    // en de volgorde binnen de hoog-risico-groep het risico zelf blijft volgen
+    // (risico 4,2 staat boven risico 4,0). Bedrag/urgentie bepalen de volgorde
+    // alleen nog wanneer de gewogen score boven de ondergrens uitkomt.
+    const RISICO_FLOOR_OFFSET = 0.5
+    const priorityFloor = scores.risicoScore - RISICO_FLOOR_OFFSET
+    const priorityFloorActief = priorityFloor > priorityGewogen
+    const priorityOrigineel = Math.max(priorityGewogen, priorityFloor)
 
     // ---- Voorspelling verwachte betaaldatum + demping-check ---------------
     // Vervaldatum oudste vervallen DEBET-post (creditnota's vallen weg —
@@ -1159,6 +1171,9 @@ export function buildGeneratedDataFromRaw({
       gerelateerde_facturen: gerelateerdeFacturen,
       priority: round(priority, 2),
       priority_origineel: round(priorityOrigineel, 2),
+      priority_gewogen: round(priorityGewogen, 2),
+      priority_floor: round(priorityFloor, 2),
+      priority_floor_actief: priorityFloorActief,
       priority_gedempt: priorityGedempt,
       priority_weights: priorityWeights,
       voorspelling: voorspelling

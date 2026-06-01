@@ -13,9 +13,10 @@ zodat we de inhoudelijke rationale + meetbare impact bij elkaar houden.
 | `ced3248` | Implementatie: afwijking-score, toast/upload, UI-robustheid |
 
 **Tweaks in deze branch (nieuwste eerst):**
-1. Nieuwe sub-score *Hoeveel afwijking van betaalgedrag?*
+4. Prioriteit: herweging 30/20/40/10 + gladde risico-floor
+3. Nieuwe sub-score *Hoeveel afwijking van betaalgedrag?*
 2. Robuustheid detail-view voor geüploade datasets
-3. Toast-pattern voor upload- en preprocess-feedback
+1. Toast-pattern voor upload- en preprocess-feedback
 
 ---
 
@@ -48,7 +49,54 @@ zodat we de inhoudelijke rationale + meetbare impact bij elkaar houden.
 
 ## Aanpassingen
 
-### 1. Nieuwe sub-score "Hoeveel afwijking van betaalgedrag?"
+### 4. Prioriteit: herweging 30/20/40/10 + gladde risico-floor
+
+**Aanleiding** — Een hoog-risico debiteur kon onder een lager-risico maar
+grote/veilige post blijven hangen. Voorbeeld: D018924 (sterk afwijkend
+betaalgedrag) zakte met de oude weging onder D018843. De "afwijking"-score (#3)
+tilde het risico wel op, maar in de prioriteit woog risico te licht (20%) en
+impact te zwaar (40%), waardoor het signaal verwaterde.
+
+**Wijziging** — Twee aanpassingen samen ("model D"):
+1. **Herweging** van de gewogen prioriteit: impact `40 → 30%`, urgentie
+   `30 → 20%`, risico `20 → 40%`, potentieel blijft `10%`. Bij ontbrekend
+   potentieel worden de overige naar rato opgehoogd (33,3/22,2/44,4%).
+2. **Gladde risico-floor**: `priority = max(gewogen, risico − 0,5)`. Een hoge
+   risico-score kan zo niet meer wegzakken. Continu (geen trap), zodat de
+   volgorde binnen de hoog-risico-groep het risico zelf blijft volgen en er geen
+   stapeling op één waarde ontstaat. Demping naar 1,0 (verwachte betaaldatum)
+   gaat hier nog steeds vóór.
+
+**Bestanden**
+- `scripts/preprocess/build-data.mjs` — nieuwe gewichten + floor (`priority_gewogen`, `priority_floor`, `priority_floor_actief`)
+- `src/preprocess/build-data.ts` — idem voor de upload-flow
+- `src/data.ts` — `priority_gewogen` / `priority_floor` / `priority_floor_actief` op `Task`; gewichten-comment bijgewerkt
+- `src/detail/data-derivations.ts` — `derivePriorityWeights()` fallback naar 30/20/40/10
+- `src/detail/DetailView.tsx` — breakdown toont gewogen totaal + ondergrens-regel + uitleg (in ring-tooltip én "Zo komt deze prioriteit tot stand")
+- `src/data.generated.json` — geregenereerd
+
+**Parameters / drempelwaarden**
+| Parameter | Oud | Nieuw |
+|---|---|---|
+| Gewicht impact | 40% | 30% |
+| Gewicht urgentie | 30% | 20% |
+| Gewicht risico | 20% | 40% |
+| Gewicht potentieel | 10% | 10% |
+| Risico-floor | geen | `max(gewogen, risico − 0,5)` |
+
+**Impact op de dataset** (dummy, 188 taken)
+- Prioriteit-bucket vóór ↔ na: 4.0–5.0 `16 → 10`, 3.0–3.9 `50 → 56`, 2.0–2.9 `87 → 65`, 1.0–1.9 `35 → 57`. Impact-zware/veilige posten zakken; risico-zware posten stijgen.
+- Risico-floor actief op **57/188** taken; bij **41** daarvan (niet gedempt) tilt de floor de prioriteit op met gemiddeld **+0,25** (max **+0,65**).
+- Voorbeeld-cases:
+  - D000372 — risico 3,58, gewogen 2,43 → prioriteit **3,08** (floor tilt +0,65).
+  - D000803 — risico 3,58, gewogen 2,43 → prioriteit **3,08**.
+  - D000117 — risico 4,44, gewogen 3,88 → floor 3,94 bepaalt de prioriteit.
+
+**Commit** — `298a32c` Prioriteit: herweging 30/20/40/10 + gladde risico-floor
+
+---
+
+### 3. Nieuwe sub-score "Hoeveel afwijking van betaalgedrag?"
 
 **Aanleiding** — De risico-score verdunde de "historisch nette betaler die nu
 fors afwijkt"-situatie weg. Voorbeelden: D103808 (mediaan 0d op betaalde
@@ -130,7 +178,7 @@ is `!== undefined` vervangen door `!= null`, zodat JSON-null ook wordt afgevange
 
 ---
 
-### 3. Toast-pattern voor upload- en preprocess-feedback
+### 1. Toast-pattern voor upload- en preprocess-feedback
 
 **Aanleiding** — Bij mislukte of trage uploads kreeg de gebruiker geen duidelijke
 feedback (alleen stil falen of bevroren tab). Grote bestanden (>25 MB) liepen vast

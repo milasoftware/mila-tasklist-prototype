@@ -35,17 +35,27 @@ export type Task = {
   bedrag?: number
   gerelateerde_facturen?: string[]
   priority: number
-  // Originele priority-score volgens de formule
-  //   0.4*impact + 0.3*urgentie + 0.2*risico + 0.1*potentieel
+  // Priority vóór demping, inclusief risico-floor:
+  //   max(gewogen, risico − 0.5)
   // Wordt gebruikt voor transparantie in de UI wanneer demping actief is.
   priority_origineel: number
+  // Puur gewogen priority (0.3*impact + 0.2*urgentie + 0.4*risico +
+  // 0.1*potentieel) vóór toepassing van de risico-floor. Optioneel zodat
+  // oudere/geüploade datasets zonder dit veld blijven werken.
+  priority_gewogen?: number
+  // Risico-ondergrens (risico.score − 0.5). Wanneer deze boven de gewogen
+  // score uitkomt, bepaalt de floor `priority_origineel`. Optioneel.
+  priority_floor?: number
+  // True wanneer de risico-floor de priority heeft opgetild boven de gewogen
+  // score. Optioneel.
+  priority_floor_actief?: boolean
   // True wanneer de priority is geforceerd naar 1.0 omdat we de betaling
   // binnen het demping-venster verwachten. Zie ook `voorspelling`.
   priority_gedempt: boolean
-  // Werkelijk gebruikte gewichten voor `priority_origineel`. Default zijn
-  // dit 0.4 / 0.3 / 0.2 / 0.1. Wanneer `potentieel.score === null` en de
+  // Werkelijk gebruikte gewichten voor de gewogen priority. Default zijn
+  // dit 0.3 / 0.2 / 0.4 / 0.1. Wanneer `potentieel.score === null` en de
   // berekening genormaliseerd is, wordt potentieel = 0 en worden de andere
-  // gewichten naar rato opgehoogd (0.4444 / 0.3333 / 0.2222 / 0).
+  // gewichten naar rato opgehoogd (0.3333 / 0.2222 / 0.4444 / 0).
   priority_weights: {
     impact: number
     urgentie: number

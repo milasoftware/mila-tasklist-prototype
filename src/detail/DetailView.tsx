@@ -70,6 +70,14 @@ export function PriorityRing({ task }: { task: Task }) {
     return pct % 1 === 0 ? `${pct.toFixed(0)}%` : `${fmtNL(pct, 1)}%`
   }
 
+  // Risico-floor: priority = max(gewogen, risico − 0,5). Wanneer de floor
+  // de score heeft opgetild tonen we beide regels apart zodat de opbouw
+  // klopt met het eindcijfer. Fallback voor oudere datasets zonder velden.
+  const gewogenTotaal =
+    task.priority_gewogen ?? rows.reduce((sum, r) => (r.nietMeegewogen ? sum : sum + r.bijdrage), 0)
+  const floorActief = task.priority_floor_actief ?? false
+  const floorWaarde = task.priority_floor ?? null
+
   return (
     <div className="group relative inline-block">
       <div className="relative" style={{ width: size, height: size }}>
@@ -145,6 +153,15 @@ export function PriorityRing({ task }: { task: Task }) {
                     </td>
                   </tr>
                 ))}
+                {floorActief && (
+                  <tr className="opacity-60 line-through">
+                    <td className="text-white/80 pr-2 py-0.5">Ondergrens risico</td>
+                    <td className="text-white/60 text-right whitespace-nowrap px-2">
+                      risico − 0,5
+                    </td>
+                    <td className="text-right whitespace-nowrap pl-2">{fmtNL(floorWaarde, 2)}</td>
+                  </tr>
+                )}
                 <tr className="border-t border-white/20">
                   <td className="font-medium pt-1.5">Origineel</td>
                   <td></td>
@@ -175,17 +192,48 @@ export function PriorityRing({ task }: { task: Task }) {
                     </td>
                   </tr>
                 ))}
-                <tr className="border-t border-white/20">
-                  <td className="font-medium pt-1.5">Totaal</td>
-                  <td></td>
-                  <td className="font-semibold text-right pt-1.5">{fmtNL(score, 2)}</td>
-                </tr>
+                {floorActief ? (
+                  <>
+                    <tr className="border-t border-white/20">
+                      <td className="text-white/70 pt-1.5">Gewogen totaal</td>
+                      <td></td>
+                      <td className="text-right text-white/70 pt-1.5">
+                        {fmtNL(gewogenTotaal, 2)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="text-sky-300 py-0.5">Ondergrens risico</td>
+                      <td className="text-white/60 text-right whitespace-nowrap px-2">
+                        risico − 0,5
+                      </td>
+                      <td className="text-right text-sky-300">{fmtNL(floorWaarde, 2)}</td>
+                    </tr>
+                    <tr className="border-t border-white/20">
+                      <td className="font-medium pt-1.5">Totaal</td>
+                      <td></td>
+                      <td className="font-semibold text-right pt-1.5">{fmtNL(score, 2)}</td>
+                    </tr>
+                  </>
+                ) : (
+                  <tr className="border-t border-white/20">
+                    <td className="font-medium pt-1.5">Totaal</td>
+                    <td></td>
+                    <td className="font-semibold text-right pt-1.5">{fmtNL(score, 2)}</td>
+                  </tr>
+                )}
               </tbody>
             </table>
+            {floorActief && (
+              <p className="text-[10px] text-white/60 mt-2 leading-snug">
+                Risico-ondergrens actief: bij een hoog risico ({fmtNL(task.risico.score, 1)})
+                zakt de priority niet onder risico − 0,5, ook al is de gewogen
+                score lager.
+              </p>
+            )}
             {genormaliseerd && (
               <p className="text-[10px] text-white/60 mt-2 leading-snug">
                 Geen betaalhistorie beschikbaar, dus de overige gewichten zijn
-                naar rato opgehoogd (40/30/20 → 44,4/33,3/22,2%).
+                naar rato opgehoogd (30/20/40 → 33,3/22,2/44,4%).
               </p>
             )}
             <p className="text-[10px] text-white/60 mt-2">{priorityHint(score)}</p>
@@ -380,19 +428,17 @@ export function AutomatischeBeslissingen({ debiteurnummer }: { debiteurnummer: s
 export function DebtorStatsBar({ task, showSources }: { task: Task; showSources: boolean }) {
   const data = getDebtorData(task)
   if (!data) return null
-  const { deb, all, open, openSum, overdueOpen, oudste } = data
+  const { deb, all, open, openSum, overdueOpen, oudste, afgesprokenBetaaltermijn } = data
   const dso = task.risico.betaalgedrag_breakdown?.dso
 
   const stats: { label: string; value: React.ReactNode }[] = []
   if (deb?.accountmanager) {
     stats.push({ label: 'Accountmanager', value: deb.accountmanager })
   }
-  if (deb?.betaaltermijn) {
-    stats.push({
-      label: 'Betaaltermijn',
-      value: <span className="tabular-nums">{deb.betaaltermijn} dagen</span>,
-    })
-  }
+  stats.push({
+    label: 'Betaaltermijn',
+    value: <span className="tabular-nums">{afgesprokenBetaaltermijn} dagen</span>,
+  })
   stats.push({
     label: 'Open posten',
     value: (
@@ -569,8 +615,8 @@ export function DebtorStatsBar({ task, showSources }: { task: Task; showSources:
       </dl>
       {showSources && (
         <SourceLine>
-          debiteur.* (NAW + accountmanager + betaaltermijn), factuur (alle posten), betaling
-          (gekoppeld via factuurnummer)
+          debiteur.* (NAW + accountmanager), factuur (betaaltermijn = vervaldatum − factuurdatum
+          van laatste post, incl. gesloten), betaling (gekoppeld via factuurnummer)
         </SourceLine>
       )}
     </section>
@@ -730,7 +776,7 @@ export function RisicoBreakdown({ task, showSources }: { task: Task; showSources
 
 export function Detail({ task, showSources }: { task: Task; showSources: boolean }) {
   // Werkelijk gebruikte gewichten — bij potentieel = null is de berekening
-  // genormaliseerd (40/30/20 → 44,4/33,3/22,2%) en valt potentieel weg.
+  // genormaliseerd (30/20/40 → 33,3/22,2/44,4%) en valt potentieel weg.
   // derivePriorityWeights vangt oudere datasets zonder dit veld op.
   const w = derivePriorityWeights(task)
   const genormaliseerd = w.genormaliseerd
@@ -741,6 +787,10 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
     potentieel: (task.potentieel.score ?? 0) * w.potentieel,
   }
   const total = calc.impact + calc.urgentie + calc.risico + calc.potentieel
+  // Risico-floor: het eindcijfer is max(gewogen, risico − 0,5).
+  const floorActief = task.priority_floor_actief ?? false
+  const floorWaarde = task.priority_floor ?? null
+  const priorityNaFloor = floorActief && floorWaarde != null ? floorWaarde : total
   const fmtPct = (weight: number) => {
     const pct = weight * 100
     return pct % 1 === 0 ? `${pct.toFixed(0)}%` : `${fmtNL(pct, 1)}%`
@@ -1209,14 +1259,45 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
             <span className={genormaliseerd ? 'text-slate-400 italic text-right' : 'text-slate-700 text-right'}>
               {genormaliseerd ? '—' : fmtNL(calc.potentieel, 2)}
             </span>
-            <span className="text-slate-900 font-medium border-t border-slate-200 pt-1.5 mt-1">
-              Totaal
-            </span>
-            <span className="col-span-2 border-t border-slate-200 pt-1.5 mt-1"></span>
-            <span className="text-slate-900 font-semibold text-right border-t border-slate-200 pt-1.5 mt-1">
-              {fmtNL(total, 2)}
-            </span>
+            {floorActief ? (
+              <>
+                <span className="text-slate-600 border-t border-slate-200 pt-1.5 mt-1">
+                  Gewogen totaal
+                </span>
+                <span className="col-span-2 border-t border-slate-200 pt-1.5 mt-1"></span>
+                <span className="text-slate-600 text-right border-t border-slate-200 pt-1.5 mt-1">
+                  {fmtNL(total, 2)}
+                </span>
+                <span className="text-sky-600">Ondergrens risico</span>
+                <span className="col-span-2 text-slate-400">risico − 0,5</span>
+                <span className="text-sky-600 text-right">{fmtNL(floorWaarde, 2)}</span>
+                <span className="text-slate-900 font-medium border-t border-slate-200 pt-1.5 mt-1">
+                  Totaal
+                </span>
+                <span className="col-span-2 border-t border-slate-200 pt-1.5 mt-1"></span>
+                <span className="text-slate-900 font-semibold text-right border-t border-slate-200 pt-1.5 mt-1">
+                  {fmtNL(priorityNaFloor, 2)}
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="text-slate-900 font-medium border-t border-slate-200 pt-1.5 mt-1">
+                  Totaal
+                </span>
+                <span className="col-span-2 border-t border-slate-200 pt-1.5 mt-1"></span>
+                <span className="text-slate-900 font-semibold text-right border-t border-slate-200 pt-1.5 mt-1">
+                  {fmtNL(total, 2)}
+                </span>
+              </>
+            )}
           </div>
+          {floorActief && (
+            <p className="text-xs text-sky-700 bg-sky-50 border border-sky-100 rounded px-2 py-1.5 mt-2 leading-snug">
+              Risico-ondergrens actief: bij een hoog risico ({fmtNL(task.risico.score, 1)}) zakt de
+              prioriteit niet onder risico − 0,5 ({fmtNL(floorWaarde, 2)}), ook al ligt de gewogen
+              score lager ({fmtNL(total, 2)}).
+            </p>
+          )}
           {showSources && (
             <p className="font-mono text-xs text-slate-400 mt-3">
               ({fmtNL(task.impact.score, 1)} × {fmtNL(w.impact, 4)}) + (
