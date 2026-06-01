@@ -6,11 +6,16 @@ Levend overzicht van aanpassingen in deze branch (scores, UX en robuustheid).
 Elke tweak wordt **na implementatie** toegevoegd volgens onderstaand vast format,
 zodat we de inhoudelijke rationale + meetbare impact bij elkaar houden.
 
-**Commits op remote (boven `main`):**
+**Commits in deze branch (boven `main`, nieuwste eerst):**
 | Hash | Onderwerp |
 |---|---|
-| `1becc3c` | Docs: commit-referenties in dit bestand |
-| `ced3248` | Implementatie: afwijking-score, toast/upload, UI-robustheid |
+| `02b8e84` | Prioriteit: herweging 30/20/40/10 + gladde risico-floor |
+| `20edff4` | Docs: volledig branch-overzicht (afwijking, robuustheid, toast) |
+| `1becc3c` | Docs: afwijking-tweak gekoppeld aan commit `ced3248` |
+| `ced3248` | Implementatie: afwijking-score, toast/upload, UI-robuustheid |
+
+> Doc-only vervolgcommits (zoals deze aanvulling) staan niet in de tabel; de
+> implementatie-commits hierboven zijn leidend.
 
 **Tweaks in deze branch (nieuwste eerst):**
 4. Prioriteit: herweging 30/20/40/10 + gladde risico-floor
@@ -92,7 +97,7 @@ impact te zwaar (40%), waardoor het signaal verwaterde.
   - D000803 — risico 3,58, gewogen 2,43 → prioriteit **3,08**.
   - D000117 — risico 4,44, gewogen 3,88 → floor 3,94 bepaalt de prioriteit.
 
-**Commit** — `298a32c` Prioriteit: herweging 30/20/40/10 + gladde risico-floor
+**Commit** — `02b8e84` Prioriteit: herweging 30/20/40/10 + gladde risico-floor
 
 ---
 
@@ -154,7 +159,8 @@ waardoor `task.priority_weights.genormaliseerd` crashte.
 `fmtDM` geven `—` bij `null`, `undefined` of `NaN`. In `DetailView` en `tooltips`
 is `!== undefined` vervangen door `!= null`, zodat JSON-null ook wordt afgevangen.
 `derivePriorityWeights()` leidt ontbrekende gewichten af uit `potentieel.score`
-(originele 40/30/20/10 of genormaliseerd 44,4/33,3/22,2).
+(destijds 40/30/20/10 of genormaliseerd 44,4/33,3/22,2 — in tweak #4 gewijzigd
+naar 30/20/40/10).
 
 **Bestanden**
 - `src/detail/format.ts` — defensieve formatters + uitleg in comment
@@ -213,15 +219,9 @@ Bij quota-fout wordt `node scripts/preprocess.mjs` als workaround genoemd.
 ---
 
 <!--
-Voeg hier nieuwe tweaks toe (nieuwste bovenaan), bv:
-
-### 1. Pattern-drempel verlagen voor meer voorspellingen
-
-**Aanleiding** — 78 van de 188 taken hadden geen verwachte betaaldatum,
-  voornamelijk doordat de gestaffelde drempel (≥10 hits ≥40%, ≥4 hits ≥50%,
-  ≥3 hits 100%) te streng bleek voor klanten die wel een licht patroon laten zien.
-
-**Wijziging** — Drempel verlaagd naar ...
-
-...
+Volgende tweak = #5. Plaats die als nieuw blok bovenaan "## Aanpassingen"
+(direct onder de heading, dus boven tweak #4) en werk ook bij:
+- de tabel "Commits in deze branch" (alleen implementatie-commits)
+- de lijst "Tweaks in deze branch (nieuwste eerst)"
+Gebruik het vaste format uit "## Format per tweak".
 -->
