@@ -9,6 +9,7 @@ zodat we de inhoudelijke rationale + meetbare impact bij elkaar houden.
 **Commits in deze branch (boven `main`, nieuwste eerst):**
 | Hash | Onderwerp |
 |---|---|
+| `b1fbd0b` | Prioriteit: afronden op 1 decimaal (half-up) + tie-breaker |
 | `02b8e84` | Prioriteit: herweging 30/20/40/10 + gladde risico-floor |
 | `20edff4` | Docs: volledig branch-overzicht (afwijking, robuustheid, toast) |
 | `1becc3c` | Docs: afwijking-tweak gekoppeld aan commit `ced3248` |
@@ -88,9 +89,9 @@ totaal, ondergrens, debug-formule) blijven op 2 decimalen als rekendetail.
 **Impact op de dataset** (dummy, 188 taken)
 - Alle 188 taken hebben nu een priority op 1 decimaal; volgorde blijft aflopend.
 - Half-up zichtbaar bij de `,x5`-grens: `priority_origineel 3,95 → priority 4,0`, `3,99 → 4,0`.
-- Voorbeeld-tie: D001035 (orig 3,99), D000922 (3,97), D000906 (3,97), D000997 (3,95) — allen priority `4,0`, gesorteerd op de fijnere `priority_origineel`.
+  - Voorbeeld-tie: D001035 (orig 3,99), D000922 (3,97), D000906 (3,97), D000997 (3,95) — allen priority `4,0`, gesorteerd op de fijnere `priority_origineel`.
 
-**Commit** — _nog te committen_
+**Commit** — `b1fbd0b` Prioriteit: afronden op 1 decimaal (half-up) + tie-breaker op priority_origineel
 
 ---
 
