@@ -79,7 +79,7 @@ afwijking)` — mag de score dus alleen omhoog trekken, nooit verdunnen.
   - D000977 — vroegbetaler (mediaan −27d), oudste 2d → clamp houdt afw op 2, risico 1.33 (niet onterecht opgeschaald).
 - Upload-dataset (66 taken): 3.0–3.9 `5 → 19`, 4.0–5.0 `3 → 6`; clamp voorkomt dat lichte achterstanden bij vroegbetalers ten onrechte naar 4/5 springen.
 
-**Commit** — _nog te committen_
+**Commit** — `ced3248` Risico: nieuwe sub-score 'afwijking van betaalgedrag' + max-regel
 
 <!--
 Voeg hier nieuwe tweaks toe (nieuwste bovenaan), bv:
