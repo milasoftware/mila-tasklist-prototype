@@ -2,9 +2,20 @@
 
 Branch: `Tweaken-scores` · Basis: `main` @ `8c8b3de`
 
-Levend overzicht van score-aanpassingen die in deze branch worden doorgevoerd.
+Levend overzicht van aanpassingen in deze branch (scores, UX en robuustheid).
 Elke tweak wordt **na implementatie** toegevoegd volgens onderstaand vast format,
 zodat we de inhoudelijke rationale + meetbare impact bij elkaar houden.
+
+**Commits op remote (boven `main`):**
+| Hash | Onderwerp |
+|---|---|
+| `1becc3c` | Docs: commit-referenties in dit bestand |
+| `ced3248` | Implementatie: afwijking-score, toast/upload, UI-robustheid |
+
+**Tweaks in deze branch (nieuwste eerst):**
+1. Nieuwe sub-score *Hoeveel afwijking van betaalgedrag?*
+2. Robuustheid detail-view voor geüploade datasets
+3. Toast-pattern voor upload- en preprocess-feedback
 
 ---
 
@@ -80,6 +91,78 @@ afwijking)` — mag de score dus alleen omhoog trekken, nooit verdunnen.
 - Upload-dataset (66 taken): 3.0–3.9 `5 → 19`, 4.0–5.0 `3 → 6`; clamp voorkomt dat lichte achterstanden bij vroegbetalers ten onrechte naar 4/5 springen.
 
 **Commit** — `ced3248` Risico: nieuwe sub-score 'afwijking van betaalgedrag' + max-regel
+
+---
+
+### 2. Robuustheid detail-view voor geüploade datasets
+
+**Aanleiding** — Na upload van Effect-data crashte de detail-pagina (wit scherm).
+Twee oorzaken: (1) geüploade JSON levert `null` voor ontbrekende numerieke velden,
+terwijl de UI `undefined` verwachtte — `fmtEUR(null)` gooide een exception;
+(2) datasets die vóór de `priority_weights`-tweak zijn gegenereerd misten dat veld,
+waardoor `task.priority_weights.genormaliseerd` crashte.
+
+**Wijziging** — Formatters en checks zijn defensief gemaakt: `fmtEUR`, `fmtNL` en
+`fmtDM` geven `—` bij `null`, `undefined` of `NaN`. In `DetailView` en `tooltips`
+is `!== undefined` vervangen door `!= null`, zodat JSON-null ook wordt afgevangen.
+`derivePriorityWeights()` leidt ontbrekende gewichten af uit `potentieel.score`
+(originele 40/30/20/10 of genormaliseerd 44,4/33,3/22,2).
+
+**Bestanden**
+- `src/detail/format.ts` — defensieve formatters + uitleg in comment
+- `src/detail/data-derivations.ts` — nieuwe `derivePriorityWeights()` helper
+- `src/detail/DetailView.tsx` — `derivePriorityWeights` i.p.v. directe `priority_weights`; `!= null` checks op impact/urgentie/risico-velden
+- `src/detail/tooltips.tsx` — `!= null` checks op bedragen, percentages en pattern-metadata
+
+**Parameters / drempelwaarden**
+| Parameter | Oud | Nieuw |
+|---|---|---|
+| Ontbrekend numeriek veld in UI | crash | toon `—` |
+| Ontbrekend `priority_weights` | crash | afleiden uit potentieel |
+| Null-check in UI | `!== undefined` | `!= null` (vangt ook JSON `null`) |
+
+**Impact op de dataset**
+- Geen score-wijziging — puur UI/compatibiliteit.
+- Detail-view opent weer voor geüploade Effect-selectiedata (66 taken) en oudere opgeslagen datasets in `localStorage`.
+- Voorbeeld: taak met `impact.bedrag: null` of zonder `priority_weights` degradeert per veld i.p.v. wit scherm.
+
+**Commit** — `ced3248` Risico: nieuwe sub-score 'afwijking van betaalgedrag' + max-regel
+
+---
+
+### 3. Toast-pattern voor upload- en preprocess-feedback
+
+**Aanleiding** — Bij mislukte of trage uploads kreeg de gebruiker geen duidelijke
+feedback (alleen stil falen of bevroren tab). Grote bestanden (>25 MB) liepen vast
+zonder waarschuwing; `QuotaExceededError` bij `localStorage` was niet te herkennen.
+
+**Wijziging** — Lichtgewicht toast-systeem zonder externe dependencies:
+`ToastProvider` + `useToast()` met varianten info/success/warning/error, sticky
+errors en optionele actie-knop. `DataUploadButton` toont per fouttype een passende
+toast (parse, structuur, quota, build) en een vooraf-waarschuwing bij grote uploads.
+Bij quota-fout wordt `node scripts/preprocess.mjs` als workaround genoemd.
+
+**Bestanden**
+- `src/toast.tsx` — nieuw: `ToastProvider`, `useToast`, `ToastViewport`, varianten + auto-dismiss
+- `src/App.tsx` — `ToastProvider` rond lijst- en detail-view
+- `src/list/DataUploadButton.tsx` — toast i.p.v. inline status; `ParseError`, `StructureError`, `QuotaError`, `BuildError`; drempel 25 MB
+
+**Parameters / drempelwaarden**
+| Parameter | Oud | Nieuw |
+|---|---|---|
+| Upload-feedback | inline status / geen | toast per scenario |
+| Grote upload-waarschuwing | geen | bij totaal > 25 MB |
+| Error auto-dismiss | n.v.t. | info 5s, success 4s; warning/error sticky |
+| Quota-fout | onduidelijk | toast + tip lokale preprocess |
+
+**Impact op de dataset**
+- Geen score-wijziging — alleen UX rond upload/preprocess.
+- Gebruiker ziet nu expliciet: verwerken bezig, succes + reload, of concrete fout
+  (ongeldige JSON, verkeerde bestandsstructuur, dataset te groot, build-fout).
+
+**Commit** — `ced3248` Risico: nieuwe sub-score 'afwijking van betaalgedrag' + max-regel
+
+---
 
 <!--
 Voeg hier nieuwe tweaks toe (nieuwste bovenaan), bv:
