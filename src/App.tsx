@@ -25,7 +25,11 @@ import { ToastProvider } from './toast'
 
 
 export default function App() {
-  const sorted = [...tasks].sort((a, b) => b.priority - a.priority)
+  // Sorteer op de 1-decimaal priority; binnen gelijke scores beslist de
+  // fijnere priority_origineel (2 decimalen) over de volgorde.
+  const sorted = [...tasks].sort(
+    (a, b) => b.priority - a.priority || (b.priority_origineel ?? 0) - (a.priority_origineel ?? 0),
+  )
   const [showSources, setShowSources] = useState(false)
   const [route, navigate] = useHashRoute()
 

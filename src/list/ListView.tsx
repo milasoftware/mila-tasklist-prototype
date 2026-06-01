@@ -52,7 +52,7 @@ export function TaskRow({ task, selected, onClick }: { task: Task; selected: boo
               className="text-[11px] mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 ring-1 ring-sky-200"
               title={`Verwacht op ${task.voorspelling.pattern_value}. Originele priority was ${fmtNL(
                 task.priority_origineel,
-                2,
+                1,
               )}.`}
             >
               <span aria-hidden>⏳</span>

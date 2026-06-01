@@ -1169,7 +1169,10 @@ export function buildGeneratedDataFromRaw({
       factuurnummer: factuurnummerVoorTaak,
       bedrag: c.totaalBedrag,
       gerelateerde_facturen: gerelateerdeFacturen,
-      priority: round(priority, 2),
+      // Priority op 1 decimaal, half-up (≥ x,x5 omhoog, daaronder omlaag).
+      // priority_origineel blijft 2 decimalen: dient als precieze tie-breaker
+      // bij het sorteren binnen gelijke 1-decimaal-scores.
+      priority: round(priority, 1),
       priority_origineel: round(priorityOrigineel, 2),
       priority_gewogen: round(priorityGewogen, 2),
       priority_floor: round(priorityFloor, 2),
@@ -1263,7 +1266,9 @@ export function buildGeneratedDataFromRaw({
     })
   }
 
-  tasks.sort((a, b) => b.priority - a.priority)
+  // Sorteer op de 1-decimaal priority; binnen gelijke scores beslist de
+  // 2-decimaal priority_origineel zodat de volgorde fijnmazig blijft.
+  tasks.sort((a, b) => b.priority - a.priority || b.priority_origineel - a.priority_origineel)
   const topTasks = tasks.slice(0, TOP_N)
   const selectionLabel = TOP_N === Infinity ? 'alle' : `top-${TOP_N}`
   console.log(`Taken gegenereerd: ${tasks.length}, ${selectionLabel} geselecteerd (${topTasks.length}).`)

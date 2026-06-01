@@ -18,6 +18,7 @@ zodat we de inhoudelijke rationale + meetbare impact bij elkaar houden.
 > implementatie-commits hierboven zijn leidend.
 
 **Tweaks in deze branch (nieuwste eerst):**
+5. Prioriteitsscore afgerond op 1 decimaal (half-up)
 4. Prioriteit: herweging 30/20/40/10 + gladde risico-floor
 3. Nieuwe sub-score *Hoeveel afwijking van betaalgedrag?*
 2. Robuustheid detail-view voor geüploade datasets
@@ -53,6 +54,45 @@ zodat we de inhoudelijke rationale + meetbare impact bij elkaar houden.
 ---
 
 ## Aanpassingen
+
+### 5. Prioriteitsscore afgerond op 1 decimaal (half-up)
+
+**Aanleiding** — De priority werd opgeslagen op 2 decimalen en in het
+detailscherm ook zo getoond (bv. `3,83`). Gewenst is één decimaal, met
+half-up afronding: vanaf `,x5` omhoog, daaronder omlaag (`3,85 → 3,9`,
+`3,84 → 3,8`).
+
+**Wijziging** — De opgeslagen `priority` wordt nu op 1 decimaal afgerond
+(`round(priority, 1)`, half-up via `Math.round`). `priority_origineel` blijft
+bewust op 2 decimalen en dient als fijnmazige tie-breaker bij het sorteren,
+zodat taken met dezelfde 1-decimaal-score toch in een logische volgorde staan.
+Alle priority-weergaven (detail-ring, opbouw-tooltip, "Zo komt deze prioriteit
+tot stand") tonen 1 decimaal; de lijst deed dat al. De tussenstappen (gewogen
+totaal, ondergrens, debug-formule) blijven op 2 decimalen als rekendetail.
+
+**Bestanden**
+- `scripts/preprocess/build-data.mjs` — `priority` op 1 decimaal + sort-tie-breaker op `priority_origineel`
+- `src/preprocess/build-data.ts` — idem voor de upload-flow
+- `src/App.tsx` — lijst-sortering met tie-breaker op `priority_origineel`
+- `src/detail/DetailView.tsx` — ring + tooltips + opbouw-totaal op 1 decimaal
+- `src/list/ListView.tsx` — "originele priority"-tooltip op 1 decimaal
+- `src/data.generated.json` — geregenereerd
+
+**Parameters / drempelwaarden**
+| Parameter | Oud | Nieuw |
+|---|---|---|
+| Decimalen `priority` | 2 | 1 |
+| Afrondmethode | n.v.t. (toonde 2) | half-up (`Math.round`) |
+| Tie-breaker sortering | geen | `priority_origineel` (2 dec.) |
+
+**Impact op de dataset** (dummy, 188 taken)
+- Alle 188 taken hebben nu een priority op 1 decimaal; volgorde blijft aflopend.
+- Half-up zichtbaar bij de `,x5`-grens: `priority_origineel 3,95 → priority 4,0`, `3,99 → 4,0`.
+- Voorbeeld-tie: D001035 (orig 3,99), D000922 (3,97), D000906 (3,97), D000997 (3,95) — allen priority `4,0`, gesorteerd op de fijnere `priority_origineel`.
+
+**Commit** — _nog te committen_
+
+---
 
 ### 4. Prioriteit: herweging 30/20/40/10 + gladde risico-floor
 

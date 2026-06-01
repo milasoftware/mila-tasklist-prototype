@@ -106,7 +106,7 @@ export function PriorityRing({ task }: { task: Task }) {
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           <span className="text-2xl font-semibold text-slate-900 tabular-nums leading-none">
-            {fmtNL(score, 2)}
+            {fmtNL(score, 1)}
           </span>
           <span className="text-[10px] text-slate-400 mt-0.5">van 5</span>
         </div>
@@ -166,7 +166,7 @@ export function PriorityRing({ task }: { task: Task }) {
                   <td className="font-medium pt-1.5">Origineel</td>
                   <td></td>
                   <td className="font-semibold text-right pt-1.5">
-                    {fmtNL(task.priority_origineel, 2)}
+                    {fmtNL(task.priority_origineel, 1)}
                   </td>
                 </tr>
               </tbody>
@@ -211,14 +211,14 @@ export function PriorityRing({ task }: { task: Task }) {
                     <tr className="border-t border-white/20">
                       <td className="font-medium pt-1.5">Totaal</td>
                       <td></td>
-                      <td className="font-semibold text-right pt-1.5">{fmtNL(score, 2)}</td>
+                      <td className="font-semibold text-right pt-1.5">{fmtNL(score, 1)}</td>
                     </tr>
                   </>
                 ) : (
                   <tr className="border-t border-white/20">
                     <td className="font-medium pt-1.5">Totaal</td>
                     <td></td>
-                    <td className="font-semibold text-right pt-1.5">{fmtNL(score, 2)}</td>
+                    <td className="font-semibold text-right pt-1.5">{fmtNL(score, 1)}</td>
                   </tr>
                 )}
               </tbody>
@@ -1276,7 +1276,7 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
                 </span>
                 <span className="col-span-2 border-t border-slate-200 pt-1.5 mt-1"></span>
                 <span className="text-slate-900 font-semibold text-right border-t border-slate-200 pt-1.5 mt-1">
-                  {fmtNL(priorityNaFloor, 2)}
+                  {fmtNL(priorityNaFloor, 1)}
                 </span>
               </>
             ) : (
@@ -1286,7 +1286,7 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
                 </span>
                 <span className="col-span-2 border-t border-slate-200 pt-1.5 mt-1"></span>
                 <span className="text-slate-900 font-semibold text-right border-t border-slate-200 pt-1.5 mt-1">
-                  {fmtNL(total, 2)}
+                  {fmtNL(total, 1)}
                 </span>
               </>
             )}
