@@ -1318,15 +1318,9 @@ export function Detail({ task, showSources }: { task: Task; showSources: boolean
           <ul className="text-xs space-y-1 leading-relaxed">
             <li>
               <span className="font-medium text-slate-500">
-                Voorspellen of een klant wanbetaalt
+                Niet nagekomen betalingsregelingen
               </span>{' '}
-              · komt in een latere fase (vereist een klein achterliggend rekenmodel).
-            </li>
-            <li>
-              <span className="font-medium text-slate-500">
-                Uitgebreidere uitleg per component
-              </span>{' '}
-              · nu standaardtekst, later met AI verrijkt.
+              · er wordt nog geen rekening gehouden; zou direct score 5 zijn.
             </li>
             <li>
               <span className="font-medium text-slate-500">
