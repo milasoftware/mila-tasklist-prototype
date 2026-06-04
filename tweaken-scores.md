@@ -9,16 +9,16 @@ zodat we de inhoudelijke rationale + meetbare impact bij elkaar houden.
 **Commits in deze branch (boven `main`, nieuwste eerst):**
 | Hash | Onderwerp |
 |---|---|
+| `87c510a` | Detail: blok *Wat nog niet meedoet* bijgewerkt |
 | `b1fbd0b` | Prioriteit: afronden op 1 decimaal (half-up) + tie-breaker |
 | `02b8e84` | Prioriteit: herweging 30/20/40/10 + gladde risico-floor |
-| `20edff4` | Docs: volledig branch-overzicht (afwijking, robuustheid, toast) |
-| `1becc3c` | Docs: afwijking-tweak gekoppeld aan commit `ced3248` |
 | `ced3248` | Implementatie: afwijking-score, toast/upload, UI-robuustheid |
 
-> Doc-only vervolgcommits (zoals deze aanvulling) staan niet in de tabel; de
-> implementatie-commits hierboven zijn leidend.
+**Doc-only commits** (alleen `tweaken-scores.md`, niet in tabel hierboven):
+`b46cfbb`, `6f6456d`, `20edff4`, `1becc3c`.
 
 **Tweaks in deze branch (nieuwste eerst):**
+6. Detail: blok *Wat nog niet meedoet* (betalingsregelingen)
 5. Prioriteitsscore afgerond op 1 decimaal (half-up)
 4. Prioriteit: herweging 30/20/40/10 + gladde risico-floor
 3. Nieuwe sub-score *Hoeveel afwijking van betaalgedrag?*
@@ -55,6 +55,40 @@ zodat we de inhoudelijke rationale + meetbare impact bij elkaar houden.
 ---
 
 ## Aanpassingen
+
+### 6. Detail: blok *Wat nog niet meedoet* (betalingsregelingen)
+
+**Aanleiding** — Het blok onderaan de detail-view somt op wat nog **niet** in de
+scores zit. Twee oudere bullets (wanbetalingsvoorspelling, AI-uitleg) waren niet
+meer relevant; wel ontbrak een expliciete noot over **niet nagekomen
+betalingsregelingen**, die in de gewenste logica direct score 5 zouden moeten geven.
+
+**Wijziging** — In de lijst *Wat nog niet meedoet* verwijderd:
+- *Voorspellen of een klant wanbetaalt*
+- *Uitgebreidere uitleg per component*
+
+Toegevoegd:
+- **Niet nagekomen betalingsregelingen** · er wordt nog geen rekening gehouden;
+  zou direct score 5 zijn.
+
+Behouden: *Slimmere inschatting type opbrengst*.
+
+**Bestanden**
+- `src/detail/DetailView.tsx` — `<ul>` in sectie *Wat nog niet meedoet*
+
+**Parameters / drempelwaarden**
+| Parameter | Oud | Nieuw |
+|---|---|---|
+| Lijst *Wat nog niet meedoet* | 3 bullets | 2 bullets (wanbetaling + AI-uitleg weg) |
+| Betalingsregelingen | niet genoemd | genoemd als ontbrekend (gewenst: direct 5) |
+
+**Impact op de dataset**
+- Geen score-wijziging — alleen transparantie-copy in de UI.
+- Gebruiker ziet op de detailpagina welk risico-aspect nog niet in de berekening zit.
+
+**Commit** — `87c510a` Detail: Wat nog niet meedoet bijgewerkt (betalingsregelingen)
+
+---
 
 ### 5. Prioriteitsscore afgerond op 1 decimaal (half-up)
 
@@ -260,9 +294,9 @@ Bij quota-fout wordt `node scripts/preprocess.mjs` als workaround genoemd.
 ---
 
 <!--
-Volgende tweak = #5. Plaats die als nieuw blok bovenaan "## Aanpassingen"
-(direct onder de heading, dus boven tweak #4) en werk ook bij:
-- de tabel "Commits in deze branch" (alleen implementatie-commits)
+Volgende tweak = #7. Plaats die als nieuw blok bovenaan "## Aanpassingen"
+(direct onder de heading, dus boven de hoogste bestaande nummer) en werk ook bij:
+- de tabel "Commits in deze branch" (implementatie-commits)
 - de lijst "Tweaks in deze branch (nieuwste eerst)"
 Gebruik het vaste format uit "## Format per tweak".
 -->
